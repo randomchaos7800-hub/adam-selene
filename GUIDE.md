@@ -324,14 +324,14 @@ score = decay_rate ^ age_in_days
 
 Different fact categories have different decay rates:
 
-| Category | Decay Rate | Half-Life |
-|----------|-----------|-----------|
+| Category | Decay Rate | Days to Archive (0.10) |
+|----------|-----------|------------------------|
 | status | 0.94 | ~37 days |
-| preference | 0.97 | ~50 days |
-| constraint | 0.97 | ~74 days |
-| decision | 0.98 | ~112 days |
-| relationship | 0.992 | ~285 days |
-| milestone | 0.992 | ~285 days |
+| preference | 0.97 | ~76 days |
+| constraint | 0.97 | ~76 days |
+| decision | 0.98 | ~114 days |
+| milestone | 0.992 | ~287 days |
+| relationship | 0.992 | ~287 days |
 
 **Recency boost:** If the entity was referenced in the last 7 days, all its facts get a 1.6x boost (capped at 1.0). Things you're actively thinking about resist decay.
 
@@ -778,8 +778,6 @@ The setup wizard (`setup_wizard.py`) generates a personalized constitution based
 
 ---
 
-**License:** This document is (c) 2026 Vitale Dynamics LLC. All rights reserved.
-
-**Adam Selene (open source):** github.com/randomchaos7800-hub/adam-selene | MIT License
+**License:** This document is part of the Adam Selene project and is released under the MIT License.
 
 **Contact:** dino@dinovitale.com | dinovitale.com

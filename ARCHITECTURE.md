@@ -102,10 +102,10 @@ Nightly "REM sleep" pass with four phases:
 
 1. **Replay** — Cross-layer signal detection (memory + LIGHTHOUSE + working memory)
 2. **Decay** — Exponential scoring per category:
-   - Status: 0.94/day (~37 days to threshold)
-   - Constraint/Preference: 0.97/day
-   - Decision: 0.98/day (~112 days)
-   - Milestone/Relationship: 0.992/day (~285 days)
+   - Status: 0.94/day (~37 days to archive threshold)
+   - Constraint/Preference: 0.97/day (~76 days)
+   - Decision: 0.98/day (~114 days)
+   - Milestone/Relationship: 0.992/day (~287 days)
 3. **Patterns** — LLM detects cross-cutting insights, promotes to MEMORY.md
 4. **Contradictions** — Finds and resolves mutually exclusive facts
 

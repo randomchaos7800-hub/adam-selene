@@ -63,7 +63,7 @@ Switchboard — routes to OpenRouter or local llama.cpp
     v
 Model Response
     |
-    +--[tool_use]--> Tool Dispatcher (38+ tools)
+    +--[tool_use]--> Tool Dispatcher (58 tools)
     |                    |
     |                    v
     |               Execute & recurse (max 40 depth)
@@ -99,7 +99,23 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
 └── sessions/              # JSONL audit trails
 ```
 
-Facts have categories (status, milestone, constraint, preference, relationship, decision) and decay scores. Milestones last ~285 days; status facts decay in ~37 days. Memory stays relevant without manual cleanup.
+Facts have categories (status, milestone, constraint, preference, relationship, decision) and decay scores. Milestones last ~287 days; status facts decay in ~37 days. Memory stays relevant without manual cleanup.
+
+## Performance
+
+Benchmarked on [LongMemEval](https://github.com/xiaowu0162/LongMemEval) with Gemma 4 26B via OpenRouter. Context-window mode only — no extraction pipeline active. This is the floor, not the ceiling.
+
+| Task | Score |
+|------|-------|
+| Single-session recall | 88-89% |
+| Temporal reasoning | 73% |
+| Knowledge update | 70% |
+| Multi-session aggregation | 54% |
+| **Overall** | **~75%** |
+
+For comparison: Supermemory (commercial, $99/month) scores 85.4%. Mem0 (GPT-4o) scores 67.6%. Full analysis in [GUIDE.md Chapter 9](GUIDE.md#chapter-9).
+
+Hardware: $500 mini PC. Benchmark cost: $5 on OpenRouter.
 
 ## Configuration
 
@@ -171,6 +187,6 @@ MIT. See [LICENSE](LICENSE).
 
 ## Credits
 
-Built by [Vitale Dynamics](https://dinovitale.com). Extracted from a production agent that's been running since early 2026.
+Built by [Vitale Dynamics](https://dinovitale.com). Extracted from a production agent that's been running daily since January 2026. Benchmarked against the field.
 
 If you build something cool with Adam Selene, tell us about it.
