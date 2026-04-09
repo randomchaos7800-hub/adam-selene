@@ -1,8 +1,8 @@
-# SmartAgent Architecture
+# Adam Selene Architecture
 
 ## System Overview
 
-SmartAgent is a stateless relay architecture. The relay itself holds no state — everything persists in files and SQLite. This means the agent survives crashes, restarts, and model swaps without losing context.
+Adam Selene is a stateless relay architecture. The relay itself holds no state — everything persists in files and SQLite. This means the agent survives crashes, restarts, and model swaps without losing context.
 
 ## Message Flow
 
@@ -75,7 +75,7 @@ Multi-model routing layer:
 ### Knowledge Graph (storage.py)
 
 ```
-~/smartagent-memory/
+~/adam-selene-memory/
 ├── entities.json                 # Master registry
 ├── life/areas/
 │   └── {category}/{entity}/

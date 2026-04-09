@@ -16,7 +16,7 @@ from relay.snapshots import SnapshotManager
 
 @pytest.fixture
 def temp_agent_memory():
-    """Create a temporary smartagent-memory directory structure."""
+    """Create a temporary adam-selene-memory directory structure."""
     with tempfile.TemporaryDirectory() as tmpdir:
         agent_memory = Path(tmpdir)
 

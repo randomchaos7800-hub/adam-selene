@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# SmartAgent backup script
+# Adam Selene backup script
 # Configurable via environment variables:
 #   SMARTAGENT_BACKUP_DIR  — where to store backups (default: /mnt/backup/smartagent)
-#   SMARTAGENT_MEMORY_DIR  — memory directory name relative to parent (default: smartagent-memory)
+#   SMARTAGENT_MEMORY_DIR  — memory directory name relative to parent (default: adam-selene-memory)
 #   SMARTAGENT_GIT_REMOTE  — git remote URL (optional, skips push if unset)
 #   SMARTAGENT_GIT_TOKEN   — git token for push (optional)
 
 SMARTAGENT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BACKUP_DIR="${SMARTAGENT_BACKUP_DIR:-/mnt/backup/smartagent}"
-MEMORY_DIR="${SMARTAGENT_MEMORY_DIR:-smartagent-memory}"
+MEMORY_DIR="${SMARTAGENT_MEMORY_DIR:-adam-selene-memory}"
 DATE=$(date +%Y-%m-%d)
 
 mkdir -p "$BACKUP_DIR"
 
-ARCHIVE="$BACKUP_DIR/smartagent-backup-${DATE}.tar.gz"
+ARCHIVE="$BACKUP_DIR/adam-selene-backup-${DATE}.tar.gz"
 
 # Build tar from the project root's parent so we can include the memory dir
 tar czf "$ARCHIVE" \
@@ -28,10 +28,10 @@ tar czf "$ARCHIVE" \
   2>/dev/null || true
 
 # Prune backups older than 30 days
-find "$BACKUP_DIR" -name "smartagent-backup-*.tar.gz" -mtime +30 -delete 2>/dev/null || true
+find "$BACKUP_DIR" -name "adam-selene-backup-*.tar.gz" -mtime +30 -delete 2>/dev/null || true
 
 SIZE=$(du -h "$ARCHIVE" | cut -f1)
-echo "SmartAgent backup complete: $ARCHIVE ($SIZE)"
+echo "Adam Selene backup complete: $ARCHIVE ($SIZE)"
 
 # Regenerate manifest and commit to git (if configured)
 cd "$SMARTAGENT_ROOT"
@@ -56,5 +56,5 @@ if [ -n "${SMARTAGENT_GIT_REMOTE:-}" ]; then
   else
     git push origin main
   fi
-  echo "SmartAgent repo pushed to remote"
+  echo "Adam Selene repo pushed to remote"
 fi

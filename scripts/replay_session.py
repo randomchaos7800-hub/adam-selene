@@ -20,7 +20,7 @@ _settings_path = SMARTAGENT_ROOT / "config" / "settings.json"
 _settings = json.loads(_settings_path.read_text()) if _settings_path.exists() else {}
 _memory_dir = os.environ.get(
     "SMARTAGENT_MEMORY_DIR",
-    _settings.get("memory_dir", str(Path.home() / "smartagent-memory"))
+    _settings.get("memory_dir", str(Path.home() / "adam-selene-memory"))
 )
 SESSIONS_DIR = Path(_memory_dir) / "sessions"
 INDEX_FILE = SESSIONS_DIR / "index.json"

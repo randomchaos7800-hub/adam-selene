@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SmartAgent Setup Wizard — Interactive CLI to configure your personal AI agent."""
+"""Adam Selene Setup Wizard — Interactive CLI to configure your personal AI agent."""
 
 import hashlib
 import json
@@ -27,7 +27,7 @@ def ask_yn(prompt: str, default: bool = False) -> bool:
 def banner():
     print("""
 ╔══════════════════════════════════════════╗
-║         SmartAgent Setup Wizard          ║
+║         Adam Selene Setup Wizard          ║
 ║   Your Personal AI Agent Framework       ║
 ╚══════════════════════════════════════════╝
 """)
@@ -116,7 +116,7 @@ def step_api() -> dict:
 
 def step_memory() -> dict:
     print("\n── Step 6: Memory Location ──\n")
-    path = ask("Where should agent memory be stored?", "~/smartagent-memory")
+    path = ask("Where should agent memory be stored?", "~/adam-selene-memory")
     return {"memory_path": path}
 
 

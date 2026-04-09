@@ -1,8 +1,8 @@
-# SmartAgent
+# Adam Selene
 
 A personal AI agent framework with persistent memory, self-reasoning, and constitutional constraints. Built for people who want an AI that actually knows them.
 
-SmartAgent isn't a chatbot. It's an always-on reasoning partner that remembers your life, reflects on its own thinking, and gets better over time — without losing what makes it yours.
+Adam Selene isn't a chatbot. It's an always-on reasoning partner that remembers your life, reflects on its own thinking, and gets better over time — without losing what makes it yours.
 
 ## What Makes This Different
 
@@ -14,14 +14,14 @@ SmartAgent isn't a chatbot. It's an always-on reasoning partner that remembers y
 - **Nightly Consolidation** — Exponential decay scoring, contradiction resolution, and pattern detection. Memory stays fresh without manual pruning.
 - **Self-Modification** — The agent can update its own prompt and behavior, with full version control and L0 constraint checking.
 - **Multi-Interface** — Telegram, Slack, and IRC out of the box. Pick one or run all three.
-- **38+ Tools** — Memory, LIGHTHOUSE, GitHub, browser (Firecrawl), shell, filesystem, IRC, tasks, and more.
+- **58 Tools** — Memory, LIGHTHOUSE, GitHub, browser (Firecrawl), shell, filesystem, IRC, tasks, research, vault, and more.
 
 ## Quickstart
 
 ```bash
 # Clone
-git clone https://github.com/randomchaos7800-hub/SmartAgent.git
-cd SmartAgent
+git clone https://github.com/randomchaos7800-hub/adam-selene.git
+cd adam-selene
 
 # Install dependencies
 python3 -m venv venv
@@ -82,7 +82,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
 ## Memory System
 
 ```
-~/smartagent-memory/
+~/adam-selene-memory/
 ├── entities.json          # Master entity registry
 ├── MEMORY.md              # Tacit knowledge (how your owner thinks)
 ├── life/areas/            # Knowledge graph
@@ -132,15 +132,15 @@ See [TOOLS.md](TOOLS.md) for the complete tool reference. Categories:
 Create a systemd user service:
 
 ```ini
-# ~/.config/systemd/user/smartagent.service
+# ~/.config/systemd/user/adam-selene.service
 [Unit]
-Description=SmartAgent
+Description=Adam Selene
 After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/path/to/SmartAgent
-ExecStart=/path/to/SmartAgent/venv/bin/python -m interfaces.telegram
+WorkingDirectory=/path/to/adam-selene
+ExecStart=/path/to/adam-selene/venv/bin/python -m interfaces.telegram
 Restart=always
 RestartSec=5
 
@@ -150,7 +150,7 @@ WantedBy=default.target
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now smartagent.service
+systemctl --user enable --now adam-selene.service
 ```
 
 ## Nightly Jobs
@@ -159,10 +159,10 @@ Set up cron for memory maintenance:
 
 ```bash
 # Memory consolidation (3 AM)
-0 3 * * * cd /path/to/SmartAgent && venv/bin/python scripts/consolidation_nightly.py
+0 3 * * * cd /path/to/adam-selene && venv/bin/python scripts/consolidation_nightly.py
 
 # LIGHTHOUSE extraction (2 AM)
-0 2 * * * cd /path/to/SmartAgent && venv/bin/python scripts/lighthouse_nightly.py
+0 2 * * * cd /path/to/adam-selene && venv/bin/python scripts/lighthouse_nightly.py
 ```
 
 ## License
@@ -173,4 +173,4 @@ MIT. See [LICENSE](LICENSE).
 
 Built by [Vitale Dynamics](https://dinovitale.com). Extracted from a production agent that's been running since early 2026.
 
-If you build something cool with SmartAgent, tell us about it.
+If you build something cool with Adam Selene, tell us about it.

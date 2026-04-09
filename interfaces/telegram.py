@@ -1,4 +1,4 @@
-"""Telegram interface for SmartAgent.
+"""Telegram interface for Adam Selene.
 
 This is just one adapter. The relay handles all conversation logic.
 Run with: python -m interfaces.telegram

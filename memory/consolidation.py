@@ -33,8 +33,8 @@ def _get_memory_root() -> Path:
     settings_path = Path(__file__).parent.parent / "config" / "settings.json"
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
-        return Path(settings.get("memory_path", "~/smartagent-memory")).expanduser()
-    return Path.home() / "smartagent-memory"
+        return Path(settings.get("memory_path", "~/adam-selene-memory")).expanduser()
+    return Path.home() / "adam-selene-memory"
 
 
 def _get_lighthouse_root() -> Path:
@@ -42,7 +42,7 @@ def _get_lighthouse_root() -> Path:
     settings_path = Path(__file__).parent.parent / "config" / "settings.json"
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
-        return Path(settings.get("lighthouse_path", "~/SmartAgent/LIGHTHOUSE")).expanduser()
+        return Path(settings.get("lighthouse_path", "~/Adam Selene/LIGHTHOUSE")).expanduser()
     return Path(__file__).parent.parent / "LIGHTHOUSE"
 
 

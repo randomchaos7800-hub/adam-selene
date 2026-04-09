@@ -317,7 +317,7 @@ def main():
 
     file_filter = args if args else None
 
-    print(f"\n{BOLD}SmartAgent Prompt Tests{RESET}")
+    print(f"\n{BOLD}Adam Selene Prompt Tests{RESET}")
     print(f"Model: see settings.json openrouter.model")
     if no_grade:
         print(f"{DIM}(model grading disabled){RESET}")

@@ -14,7 +14,7 @@ from relay.switchboard import BudgetExceededError
 @pytest.fixture
 def mock_memory_path(tmp_path):
     """Create a temporary memory directory."""
-    memory_path = tmp_path / "smartagent-memory"
+    memory_path = tmp_path / "adam-selene-memory"
     memory_path.mkdir(parents=True, exist_ok=True)
     return memory_path
 

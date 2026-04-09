@@ -1,4 +1,4 @@
-"""Slack interface for SmartAgent.
+"""Slack interface for Adam Selene.
 
 Handles incoming messages via Socket Mode and posts responses back.
 Place at: interfaces/slack_interface.py (alongside discord_interface.py, telegram.py)

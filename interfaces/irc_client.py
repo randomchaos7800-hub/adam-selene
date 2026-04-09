@@ -1,4 +1,4 @@
-"""IRC interface for SmartAgent.
+"""IRC interface for Adam Selene.
 
 Connects to configured channels, responds when mentioned.
 Run with: python -m interfaces.irc_client
@@ -52,8 +52,8 @@ def get_channels():
 IRC_CHANNELS = get_channels()
 
 
-class SmartAgentIRCBot(irc.bot.SingleServerIRCBot):
-    """SmartAgent's IRC presence."""
+class Adam SeleneIRCBot(irc.bot.SingleServerIRCBot):
+    """Adam Selene's IRC presence."""
 
     def __init__(self, api_key):
         """Initialize IRC bot."""
@@ -191,7 +191,7 @@ def main():
         print("Error: OPENROUTER_API_KEY not set")
         sys.exit(1)
 
-    bot = SmartAgentIRCBot(api_key)
+    bot = Adam SeleneIRCBot(api_key)
 
     print(f"{config.agent_name()} IRC bot starting...")
     print(f"Connecting to {IRC_SERVER}")

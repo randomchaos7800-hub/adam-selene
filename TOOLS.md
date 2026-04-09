@@ -1,4 +1,4 @@
-# SmartAgent Tool Reference
+# Adam Selene Tool Reference
 
 ## Tool Philosophy — A Wall Is Not a Stop Sign
 

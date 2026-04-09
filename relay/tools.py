@@ -1,4 +1,4 @@
-"""Memory and self-modification tools for SmartAgent.
+"""Memory and self-modification tools for Adam Selene.
 
 These are the tools the agent can call during conversation.
 V2 adds: write_memory, update_my_instructions, review_own_conversations, log_experiment.

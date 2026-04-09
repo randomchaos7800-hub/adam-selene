@@ -28,8 +28,8 @@ class TestRelayV3Init:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_constitution_loaded_on_init_when_exists(self, tmp_path):
         """Test that constitution is loaded and validated on init."""
-        # Setup mock smartagent-memory directory
-        agent_memory = tmp_path / "smartagent-memory"
+        # Setup mock adam-selene-memory directory
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         constitution_dir = agent_memory / "constitution"
@@ -59,7 +59,7 @@ class TestRelayV3Init:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_constitution_not_loaded_when_missing(self, tmp_path):
         """Test that missing constitution doesn't crash init."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         with patch("pathlib.Path.home", return_value=tmp_path):
@@ -73,7 +73,7 @@ class TestRelayV3Init:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_switchboard_initialized_on_init(self, tmp_path):
         """Test that switchboard is initialized on startup."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         with patch("pathlib.Path.home", return_value=tmp_path):
@@ -93,7 +93,7 @@ class TestSystemPromptWithConstitution:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_system_prompt_includes_constitution(self, tmp_path):
         """Test that _build_system_prompt includes constitution."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         constitution_dir = agent_memory / "constitution"
@@ -123,7 +123,7 @@ class TestSystemPromptWithConstitution:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_system_prompt_without_constitution(self, tmp_path):
         """Test system prompt when constitution is absent."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         with patch("pathlib.Path.home", return_value=tmp_path):
@@ -138,7 +138,7 @@ class TestSystemPromptWithConstitution:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_system_prompt_prefers_custom_memory_prompt(self, tmp_path):
         """Test that memory-based custom prompt takes precedence."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         # Create constitution
@@ -173,7 +173,7 @@ class TestBudgetExceededError:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_budget_exceeded_returns_friendly_message(self, tmp_path):
         """Test that BudgetExceededError is caught and returns friendly message."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         # Create a temporary database for SessionStore
@@ -219,7 +219,7 @@ class TestBudgetExceededError:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_budget_exceeded_on_follow_up(self, tmp_path):
         """Test BudgetExceededError during follow-up call (tool loop)."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         # Create database
@@ -283,7 +283,7 @@ class TestToolLoop:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_tool_use_response_executes_tool(self, tmp_path):
         """Test that tool_use stop_reason triggers tool execution."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         # Create database
@@ -349,7 +349,7 @@ class TestToolLoop:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_text_response_skips_tool_loop(self, tmp_path):
         """Test that text response doesn't enter tool loop."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         # Create database
@@ -397,7 +397,7 @@ class TestToolLoop:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_multiple_tool_calls_in_single_response(self, tmp_path):
         """Test handling multiple tool calls in one response."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         # Create database
@@ -469,7 +469,7 @@ class TestSingleton:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_get_relay_creates_singleton(self, tmp_path):
         """Test that get_relay creates a singleton instance."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         with patch("pathlib.Path.home", return_value=tmp_path):
@@ -495,7 +495,7 @@ class TestSessionPersistence:
     @patch.dict(sys.modules, {"memory": MagicMock(), "memory.storage": MagicMock()})
     def test_respond_saves_exchange(self, tmp_path):
         """Test that respond() saves message exchange to session store."""
-        agent_memory = tmp_path / "smartagent-memory"
+        agent_memory = tmp_path / "adam-selene-memory"
         agent_memory.mkdir()
 
         # Create database

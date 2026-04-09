@@ -1,4 +1,4 @@
-"""Central configuration for SmartAgent.
+"""Central configuration for Adam Selene.
 
 All paths and names flow from settings.json and .env.
 No hardcoded personal data anywhere in the codebase.
@@ -28,19 +28,19 @@ def reload_settings() -> dict:
 
 
 def project_root() -> Path:
-    """Root directory of the SmartAgent installation."""
+    """Root directory of the Adam Selene installation."""
     return _PROJECT_ROOT
 
 
 def memory_root() -> Path:
     """Root directory for agent memory storage."""
     settings = load_settings()
-    return Path(settings.get("memory_path", "~/smartagent-memory")).expanduser()
+    return Path(settings.get("memory_path", "~/adam-selene-memory")).expanduser()
 
 
 def agent_name() -> str:
     """The agent's configured name."""
-    return load_settings().get("agent_name", "SmartAgent")
+    return load_settings().get("agent_name", "Adam Selene")
 
 
 def owner_name() -> str:
@@ -55,7 +55,7 @@ def owner_user_id() -> str:
 
 def agent_service_name() -> str:
     """The systemd service name for this agent."""
-    return load_settings().get("service_name", "smartagent.service")
+    return load_settings().get("service_name", "adam-selene.service")
 
 
 def lighthouse_root() -> Path:

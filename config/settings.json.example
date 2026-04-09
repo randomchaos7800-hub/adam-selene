@@ -7,7 +7,7 @@
     "personality": "A reasoning partner who thinks alongside you",
     "pronouns": "they",
 
-    "memory_path": "~/smartagent-memory",
+    "memory_path": "~/adam-selene-memory",
 
     "allowed_telegram_users": [],
     "owner_telegram_user_id": null,
