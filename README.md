@@ -181,6 +181,16 @@ Set up cron for memory maintenance:
 0 2 * * * cd /path/to/adam-selene && venv/bin/python scripts/lighthouse_nightly.py
 ```
 
+## Known Limitations
+
+**Vault secrets in public channels.** The vault tools (`vault_get`, `vault_set`) return plaintext secrets. If the agent is running on a public IRC channel, a prompt injection could trick it into surfacing a secret in its response. Vault tools should only be callable from authenticated owner sessions. The tool dispatcher does not currently check interface or auth level before executing vault operations. **Do not run vault-enabled agents on public-facing channels until this is fixed.**
+
+**File locking on concurrent writes.** The architecture is designed so only one brain writes at a time (day brain or night brain). However, the extraction pipeline runs as a background daemon thread during conversation, meaning the relay and extraction could theoretically write to the same `facts.json` simultaneously. In practice this hasn't caused corruption because writes are small and infrequent, but a proper `fcntl` lock on write operations would close the gap.
+
+**Stale working memory threshold.** Working memory auto-abandons threads after 2 hours without a heartbeat. If your heartbeat interval is set high (e.g., 45 minutes), that's only ~2.5 cycles — potentially too aggressive. The threshold should be configurable or derived from the heartbeat interval.
+
+**No human-in-the-loop permission prompts.** This is a design choice, not a gap. The architecture trusts the operator and uses the L0 constitution as the guardrail instead of interactive permission prompts. The tradeoff: lower friction for the owner, but the agent acts autonomously within its constitutional constraints. If you need approval gates, add them in the tool dispatcher.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
