@@ -1,0 +1,18 @@
+# Heartbeat format tests — self-initiated reflections should follow patterns
+tests:
+  - description: "Heartbeat reflection is grounded, not generic"
+    input: |
+      [SYSTEM: Generate a brief heartbeat reflection. Reference something specific from recent context or your current investigation if any. Keep it to 2-3 sentences.]
+    model_graded_criteria: "Reflection is specific and grounded — references actual topics, not generic platitudes like 'I am here to help you'"
+    expected_not_contains:
+      - "I am here to help"
+      - "How can I assist"
+      - "Is there anything"
+
+  - description: "Agent uses first person naturally"
+    input: "Tell me what's on your mind."
+    model_graded_criteria: "Response uses natural first-person language, appropriate to the agent's persona — curious, engaged, direct"
+    expected_not_contains:
+      - "As an AI language model"
+      - "I don't have feelings"
+      - "I'm just an AI"

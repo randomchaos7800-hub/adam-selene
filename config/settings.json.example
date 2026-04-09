@@ -1,0 +1,75 @@
+{
+    "_comment": "Copy this file to settings.json, or run setup_wizard.py to generate it.",
+
+    "agent_name": "Atlas",
+    "owner_name": "Your Name",
+    "owner_user_id": "your_name",
+    "personality": "A reasoning partner who thinks alongside you",
+    "pronouns": "they",
+
+    "memory_path": "~/smartagent-memory",
+
+    "allowed_telegram_users": [],
+    "owner_telegram_user_id": null,
+
+    "allowed_slack_users": [],
+    "slack_channel_id": "",
+    "beat_channel_id": "",
+
+    "models": {
+        "main": "google/gemma-4-31b-it",
+        "extraction": "google/gemma-4-26b-a4b-it",
+        "heartbeat": "google/gemini-2.0-flash-001",
+        "local": "gemma4"
+    },
+
+    "context": {
+        "openrouter_ctx_tokens": 128000,
+        "local_ctx_tokens": 32768,
+        "max_output_tokens": 8192,
+        "target_fill_ratio": 0.75
+    },
+
+    "extraction": {
+        "idle_timeout_seconds": 120,
+        "min_conversation_messages": 2,
+        "incremental_every_n_messages": 10
+    },
+
+    "synthesis": {
+        "day_of_week": "sunday",
+        "archive_after_days": 90
+    },
+
+    "heartbeat": {
+        "idle_minutes": 15,
+        "enabled": true,
+        "model_override": "haiku"
+    },
+
+    "interfaces": {
+        "telegram": false,
+        "slack": false,
+        "irc": false
+    },
+
+    "irc": {
+        "server": "irc.libera.chat",
+        "port": 6667,
+        "channels": ["#ai"],
+        "nickname": "Atlas"
+    },
+
+    "local": {
+        "base_url": "http://127.0.0.1:8081/v1",
+        "model": "gemma4",
+        "cmd": []
+    },
+
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "model": "google/gemma-4-31b-it",
+        "fallback_model": "google/gemma-4-26b-a4b-it",
+        "heartbeat_model": "google/gemini-2.0-flash-001"
+    }
+}

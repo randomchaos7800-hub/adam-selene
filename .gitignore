@@ -1,0 +1,36 @@
+# Environment
+.env
+secrets.env
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated config (wizard output)
+config/settings.json
+config/agent_prompt.md
+config/l0_constraints.json
+constitution/L0.md
+constitution/L0.hash
+agents/owner_model.md
+
+# Memory (lives outside repo by default)
+*-memory/
+
+# Backups
+*.tar.gz

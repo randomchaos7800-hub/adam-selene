@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "fact_schema": {
+    "id": "string (fact-{uuid8})",
+    "fact": "string (the fact content)",
+    "category": "status|milestone|constraint|preference|relationship|decision",
+    "context": "active|staged|historical",
+    "timestamp": "ISO 8601 datetime",
+    "source": "conversation|extraction|heartbeat|synthesis",
+    "status": "active|superseded",
+    "supersededBy": "string|null (fact ID that replaced this)",
+    "content": "string (V1 compat, same as 'fact')",
+    "type": "string (V1 compat, same as 'category')",
+    "extracted": "string (V1 compat, same as 'timestamp')",
+    "active": "boolean (V1 compat, derived from status)"
+  },
+  "entity_schema": {
+    "category": "people|projects|companies|concepts",
+    "aliases": ["array of alternative names"],
+    "path": "life/areas/{category}/{name}"
+  },
+  "notes": {
+    "V1 fields (content, type, extracted, active) kept for backward compatibility",
+    "V2 fields (fact, category, context, timestamp, source, status, supersededBy) are canonical",
+    "Both schemas read correctly by storage.py"
+  }
+}

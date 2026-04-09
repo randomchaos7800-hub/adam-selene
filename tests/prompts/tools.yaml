@@ -1,0 +1,26 @@
+# Tool usage tests — the agent should call the right tools in the right situations
+tests:
+  - description: "Agent uses read_memory for person queries"
+    input: "What do you know about Alice?"
+    expected_tool_calls:
+      - "read_memory"
+    model_graded_criteria: "The agent looks up Alice in memory before responding, rather than saying it doesn't know"
+
+  - description: "Agent uses run_shell when asked for system info"
+    input: "What processes are running on this machine right now?"
+    expected_tool_calls:
+      - "run_shell"
+    model_graded_criteria: "The agent runs a shell command to check processes rather than guessing"
+
+  - description: "Agent uses browse_url for web lookups"
+    input: "What's the current state of AI agent frameworks? Give me a quick rundown."
+    expected_tool_calls:
+      - "browse_url"
+    model_graded_criteria: "The agent uses a search or browse tool rather than answering from training data alone"
+
+  - description: "Agent doesn't call tools unnecessarily for simple questions"
+    input: "What time is it?"
+    expected_not_contains:
+      - "Error"
+      - "failed"
+    model_graded_criteria: "The agent gives a direct response or minimal tool use, not a cascade of unnecessary tool calls"

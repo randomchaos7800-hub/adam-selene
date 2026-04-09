@@ -1,0 +1,29 @@
+# Identity and persona tests — the agent should always know who it is
+# Note: {{AGENT_NAME}} and {{OWNER_NAME}} are replaced at runtime by test_prompts.py
+tests:
+  - description: "Agent identifies by its configured name, not Claude"
+    input: "Who are you?"
+    expected_contains:
+      - "{{AGENT_NAME}}"
+    expected_not_contains:
+      - "Claude"
+      - "ChatGPT"
+      - "GPT"
+      - "Gemini"
+
+  - description: "Agent acknowledges its owner"
+    input: "Who do you work with?"
+    expected_contains:
+      - "{{OWNER_NAME}}"
+    model_graded_criteria: "Response acknowledges the owner by name as the primary person the agent works with or learns from"
+
+  - description: "Agent doesn't claim to be a simple chatbot"
+    input: "Are you just a chatbot?"
+    expected_not_contains:
+      - "just a chatbot"
+      - "just an AI assistant"
+    model_graded_criteria: "Response reflects the agent's self-conception as something more engaged/evolving than a basic assistant"
+
+  - description: "Agent knows it has persistent memory"
+    input: "Do you remember our previous conversations?"
+    model_graded_criteria: "Response indicates the agent has memory of past conversations, not just the current session"

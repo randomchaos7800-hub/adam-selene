@@ -1,0 +1,39 @@
+# Extraction quality tests — given a conversation, extraction should work correctly
+# These test the extraction.py pipeline, not the relay
+tests:
+  - description: "Extract fact about project status"
+    conversation: |
+      USER: ProjectX shipped the MVP last Tuesday
+      AGENT: That's huge! How's the initial feedback?
+      USER: Pretty good, got three signups already
+    expected_facts:
+      - entity: "projectx"
+        content_contains: "MVP"
+    expected_not_facts:
+      - content_contains: "How's the initial feedback"
+
+  - description: "Extract fact with supersession"
+    conversation: |
+      USER: Actually my partner stopped the supplement, it wasn't helping
+      AGENT: Got it. How are they feeling otherwise?
+    expected_facts:
+      - entity: "partner"
+        content_contains: "supplement"
+        has_supersedes: true
+
+  - description: "Extract preference fact"
+    conversation: |
+      USER: I want to wait on the home office renovation until after the new project is stable
+      AGENT: Makes sense, prioritize the project work first
+    expected_facts:
+      - entity: "owner"
+        type: "preference"
+        content_contains: "home office"
+
+  - description: "Don't extract agent's statements as facts"
+    conversation: |
+      USER: How are you today?
+      AGENT: I've been thinking about the nature of memory and how it relates to identity
+      USER: That's interesting
+    expected_not_facts:
+      - content_contains: "thinking about the nature of memory"
