@@ -57,7 +57,7 @@ Multi-model routing layer:
 
 ### 4. Tool System (tools.py)
 
-38+ tools dispatched by name via `execute_tool()`. Categories:
+58 tools dispatched by name via `execute_tool()`. Categories:
 
 - **Memory** — CRUD on knowledge graph (entities, facts, timeline, tacit)
 - **LIGHTHOUSE** — Read/write reasoning journal entries

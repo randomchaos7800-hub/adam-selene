@@ -11,7 +11,7 @@ This module defines all tools available to the agent via the Anthropic API.
 Structure:
 1. TOOL_DEFINITIONS: Array of tool schemas for Anthropic API
    - Each tool has: name, description, input_schema (JSON Schema format)
-   - Total: 38 tools
+   - Total: 58 tools
 
 2. execute_tool(): Dispatcher function that routes tool calls to handlers
    - Takes: tool_name, tool_input dict, optional session_store and user_id
