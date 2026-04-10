@@ -208,9 +208,16 @@ Secrets are stored in an age-encrypted vault (`~/.vault/secrets.age`). The agent
 
 All shell executions (blocked and allowed) are logged to the session audit trail.
 
+### Auth-Gating (Privileged Tools)
+
+`execute_tool()` enforces owner identity checks on privileged tools before execution. The `PRIVILEGED_TOOLS` set includes: `vault_get`, `vault_set`, `store_credential`, `read_credential`, `write_my_code`, `edit_my_code`, `git_commit`, `run_shell`, `update_my_instructions`.
+
+Non-owner users (e.g., IRC channel participants) receive `"Permission denied"` and the attempt is logged. Owner identity is determined by comparing `user_id` against `config.owner_user_id()`.
+
+All interfaces pass their `interface` name (`"slack"`, `"telegram"`, `"irc"`) through the relay to the tool dispatcher for audit logging.
+
 ### Remaining Gaps
 
-- **No auth-gating on vault tools.** The tool dispatcher does not check which interface or user is calling vault operations. On public channels, prompt injection could trigger vault lookups.
 - **Shell blocklist is regex-based.** Sufficiently creative encoding can bypass pattern matching. The blocklist is defense-in-depth, not a security boundary.
 
 ## Configuration

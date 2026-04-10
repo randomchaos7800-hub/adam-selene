@@ -81,7 +81,7 @@ class RelayV3:
             return f"Sorry, error: {e}"
 
         latency_ms = int((_time.monotonic() - _t0) * 1000)
-        text = self._process_response(resp, msgs, user_id, sys_prompt)
+        text = self._process_response(resp, msgs, user_id, sys_prompt, interface=interface)
         session_log.log_model_response(text, stop_reason=resp.stop_reason, latency_ms=latency_ms)
 
         self.session_store.save_exchange(user_id, message, text)
@@ -104,7 +104,7 @@ class RelayV3:
         except Exception as e:
             logger.warning(f"Incremental extraction check failed (non-fatal): {e}")
 
-    def _process_response(self, resp, msgs, user_id, sys_prompt, _depth=0):
+    def _process_response(self, resp, msgs, user_id, sys_prompt, _depth=0, interface="unknown"):
         """Process Anthropic response format."""
         if _depth >= MAX_TOOL_DEPTH:
             logger.warning(f"Tool call depth limit ({MAX_TOOL_DEPTH}) reached")
@@ -140,7 +140,8 @@ class RelayV3:
                     tool_block.name,
                     tool_block.input,
                     session_store=self.session_store,
-                    user_id=user_id
+                    user_id=user_id,
+                    interface=interface
                 )
                 session_log.log_tool_result(tool_block.name, str(result)[:200])
 
@@ -167,7 +168,7 @@ class RelayV3:
                 log_failure(context="follow_up_model_call", error=str(e), recovery="Returning error to user")
                 return f"Sorry, error: {e}"
 
-            return self._process_response(follow, msgs, user_id, sys_prompt, _depth + 1)
+            return self._process_response(follow, msgs, user_id, sys_prompt, _depth + 1, interface=interface)
 
         # No tool use - extract text from content blocks
         text_parts = []

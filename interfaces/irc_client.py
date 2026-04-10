@@ -97,7 +97,7 @@ class Adam SeleneIRCBot(irc.bot.SingleServerIRCBot):
 
             # Use channel as user_id for shared context
             user_id = f"irc:{channel}"
-            response = self.relay.respond(prompt, user_id)
+            response = self.relay.respond(prompt, user_id, interface="irc")
 
             # Don't respond if agent says to skip
             if response.strip().upper() == "SKIP":
@@ -119,7 +119,7 @@ class Adam SeleneIRCBot(irc.bot.SingleServerIRCBot):
 
         try:
             user_id = f"irc:pm:{sender}"
-            response = self.relay.respond(message, user_id)
+            response = self.relay.respond(message, user_id, interface="irc")
             self._send_response(connection, sender, response)
 
         except Exception as e:

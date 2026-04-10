@@ -127,7 +127,7 @@ def handle_message(ack, message, say, logger):
     # Get response from relay
     try:
         relay = get_relay()
-        response = relay.respond(msg_text, user_id_str, images=None)
+        response = relay.respond(msg_text, user_id_str, images=None, interface="slack")
     except Exception as e:
         logger.error(f"Error getting response: {e}")
         say(text=f"Error: {e}")

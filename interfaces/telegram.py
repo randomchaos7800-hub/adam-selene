@@ -180,7 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     try:
         relay = get_relay()
-        response = relay.respond(message_text, user_id_str)
+        response = relay.respond(message_text, user_id_str, interface="telegram")
     except Exception as e:
         logger.error(f"Error getting response: {e}")
         await update.message.reply_text(f"Error: {e}")
@@ -237,7 +237,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Send to relay with image
         relay = get_relay()
         message_text = caption if caption else "What do you see in this image?"
-        response = relay.respond(message_text, user_id_str, images=images)
+        response = relay.respond(message_text, user_id_str, images=images, interface="telegram")
 
         # Send response
         if len(response) > 4000:
@@ -330,7 +330,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Send to relay
         relay = get_relay()
-        response = relay.respond(message_text, user_id_str, images=images if images else None)
+        response = relay.respond(message_text, user_id_str, images=images if images else None, interface="telegram")
 
         # Send response
         if len(response) > 4000:

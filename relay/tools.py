@@ -1123,8 +1123,25 @@ TOOL_DEFINITIONS = [
 
 # --- Tool execution ---
 
-def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[SessionStore] = None, user_id: str = "owner") -> str:
+PRIVILEGED_TOOLS = {
+    "vault_get", "vault_set", "store_credential", "read_credential",
+    "write_my_code", "edit_my_code", "git_commit",
+    "run_shell", "update_my_instructions",
+}
+
+
+def _is_owner(user_id: str) -> bool:
+    """Check if user_id matches the configured owner."""
+    return user_id == config.owner_user_id()
+
+
+def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[SessionStore] = None, user_id: str = "owner", interface: str = "unknown") -> str:
     """Execute a tool and return the result as a string."""
+
+    # Auth gate: privileged tools require owner identity
+    if tool_name in PRIVILEGED_TOOLS and not _is_owner(user_id):
+        logger.warning(f"Denied {tool_name} for non-owner user_id={user_id} interface={interface}")
+        return f"Permission denied: '{tool_name}' requires owner authorization."
 
     if tool_name == "read_memory":
         entity = tool_input.get("entity", "")
