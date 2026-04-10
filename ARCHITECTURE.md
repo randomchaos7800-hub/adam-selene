@@ -178,6 +178,41 @@ JSONL audit trail per session:
 - Replay via `scripts/replay_session.py`
 - Cost tracking per model call
 
+## Security
+
+### Vault & Credentials
+
+Secrets are stored in an age-encrypted vault (`~/.vault/secrets.age`). The agent accesses them via `vault_get` and `vault_set` tools.
+
+**Hardening measures:**
+- `vault_set` passes secret values via **stdin** (not CLI args) to prevent exposure in `/proc/*/cmdline`
+- `vault_get` returns **masked values** (e.g., `sk-a...xxxx`) to the model context — the full value is never in conversation history or session logs
+- `read_credential` returns **key names only** with masked previews, not raw credential values
+- Credential directories are locked to `0o700`; credential files to `0o600`
+- Vault key names are validated (alphanumeric + underscore/hyphen, max 128 chars)
+
+### Session Log Redaction
+
+`log_tool_call` redacts sensitive fields (`value`, `data`, `credentials`, `api_key`, `token`, `secret`, `password`) for vault and credential tools. The JSONL audit trail records `[REDACTED]` instead of actual secret values.
+
+### Shell Blocklist
+
+`shell_tool.py` enforces a regex blocklist on all shell commands before execution. Blocked categories:
+- Destructive ops (`rm -rf`, `dd`, `mkfs`)
+- Critical service disruption (`systemctl stop nginx`, `kill 1`)
+- Vault/secret access (`.vault`, `vault.sh`, `secrets.age`)
+- Code injection (`curl | sh`, `wget | sh`, `eval`, `base64 -d | sh`)
+- Command substitution vault access (`$(... vault)`, backtick vault access)
+- SSH config modification
+- Force push
+
+All shell executions (blocked and allowed) are logged to the session audit trail.
+
+### Remaining Gaps
+
+- **No auth-gating on vault tools.** The tool dispatcher does not check which interface or user is calling vault operations. On public channels, prompt injection could trigger vault lookups.
+- **Shell blocklist is regex-based.** Sufficiently creative encoding can bypass pattern matching. The blocklist is defense-in-depth, not a security boundary.
+
 ## Configuration
 
 All behavior driven by `config/settings.json`:

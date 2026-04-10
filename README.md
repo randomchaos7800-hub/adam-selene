@@ -183,7 +183,7 @@ Set up cron for memory maintenance:
 
 ## Known Limitations
 
-**Vault secrets in public channels.** The vault tools (`vault_get`, `vault_set`) return plaintext secrets. If the agent is running on a public IRC channel, a prompt injection could trick it into surfacing a secret in its response. Vault tools should only be callable from authenticated owner sessions. The tool dispatcher does not currently check interface or auth level before executing vault operations. **Do not run vault-enabled agents on public-facing channels until this is fixed.**
+**Vault secrets in public channels.** ~~The vault tools (`vault_get`, `vault_set`) return plaintext secrets.~~ **Partially fixed:** `vault_get` and `read_credential` now return masked values (e.g., `sk-a...xxxx`) instead of raw secrets. `vault_set` passes secrets via stdin (not CLI args) to prevent `/proc/cmdline` exposure. Session logs redact sensitive tool inputs. Shell blocklist hardened against base64/eval/command-substitution bypasses. However, the tool dispatcher still does not check interface or auth level before executing vault operations — a prompt injection on a public channel could still trigger vault lookups. **Do not run vault-enabled agents on public-facing channels until auth-gating is added.**
 
 **File locking on concurrent writes.** The architecture is designed so only one brain writes at a time (day brain or night brain). However, the extraction pipeline runs as a background daemon thread during conversation, meaning the relay and extraction could theoretically write to the same `facts.json` simultaneously. In practice this hasn't caused corruption because writes are small and infrequent, but a proper `fcntl` lock on write operations would close the gap.
 
