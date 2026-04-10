@@ -261,6 +261,8 @@ def vault_get(key: str) -> dict:
     key = key.strip()
     if not key or not key.replace('_', '').replace('-', '').isalnum():
         return {"success": False, "error": "Invalid key name"}
+    if len(key) > 128:
+        return {"success": False, "error": "Key name too long (max 128 chars)"}
 
     try:
         result = subprocess.run(
@@ -292,10 +294,13 @@ def vault_set(key: str, value: str) -> dict:
     key = key.strip()
     if not key or not key.replace('_', '').replace('-', '').isalnum():
         return {"success": False, "error": "Invalid key name — use lowercase letters, numbers, underscores only"}
+    if len(key) > 128:
+        return {"success": False, "error": "Key name too long (max 128 chars)"}
 
     try:
         result = subprocess.run(
-            [str(VAULT), "set", key, value],
+            [str(VAULT), "set", key],
+            input=value,
             capture_output=True, text=True, timeout=10
         )
         if result.returncode == 0:
@@ -325,6 +330,7 @@ def store_credential(service: str, data: dict) -> dict:
     try:
         cred_dir = CREDENTIALS_DIR / service
         cred_dir.mkdir(parents=True, exist_ok=True)
+        cred_dir.chmod(0o700)
         cred_file = cred_dir / "credentials.json"
 
         # Merge with existing if present

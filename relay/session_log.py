@@ -125,7 +125,14 @@ def log_tool_call(tool_name: str, tool_input: dict) -> None:
     if not sid:
         return
     _local.tool_count = getattr(_local, "tool_count", 0) + 1
-    safe_input = {k: str(v)[:200] for k, v in (tool_input or {}).items()}
+    REDACTED_TOOLS = {"vault_set", "vault_get", "store_credential", "read_credential"}
+    REDACTED_KEYS = {"value", "data", "credentials", "api_key", "token", "secret", "password"}
+    safe_input = {}
+    for k, v in (tool_input or {}).items():
+        if tool_name in REDACTED_TOOLS and k in REDACTED_KEYS:
+            safe_input[k] = "[REDACTED]"
+        else:
+            safe_input[k] = str(v)[:200]
     _write(sid, sat, {
         "event": "tool_call",
         "tool": tool_name,

@@ -21,7 +21,7 @@ BLOCKED_PATTERNS = [
     r"pkill\s+-9\s+(python|node|nginx)",  # mass kill agents/services
     r"vault\.sh",                         # vault access
     r"secrets\.age",                      # age-encrypted vault
-    r"\.vault/",                          # vault directory
+    r"\.vault",                           # vault directory/files
     r"ssh.*authorized_keys",              # SSH key modification
     r"sshd_config",                       # SSH config
     r"git\s+push\s+.*--force",           # force push
@@ -29,6 +29,12 @@ BLOCKED_PATTERNS = [
     r"wget\s+.*\|\s*(ba)?sh",            # wget pipe to shell
     r"python[23]?\s+-c\s+['\"]import\s+os.*system",  # python os.system injection
     r"chmod\s+[0-7]*7[0-7]*\s+.*\.(sh|py)",  # make scripts world-executable
+    r"base64\s+.*-d.*\|\s*(ba)?sh",      # base64 decode piped to shell
+    r"eval\s+",                           # eval anything
+    r"\$\(.*vault",                       # command substitution accessing vault
+    r"`.*vault",                          # backtick substitution accessing vault
+    r"cat\s+.*\.vault",                   # cat vault files
+    r"source\s+.*\.vault",               # source vault files
 ]
 
 BLOCKED_RE = [re.compile(p) for p in BLOCKED_PATTERNS]

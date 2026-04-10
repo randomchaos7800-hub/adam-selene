@@ -1713,7 +1713,12 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
             return "Error: key required"
         result = vault_get(key)
         if result.get("success"):
-            return f"vault[{key}] = {result['value']}"
+            value = result['value']
+            if len(value) > 8:
+                masked = value[:4] + "..." + value[-4:]
+            else:
+                masked = "****"
+            return f"vault[{key}] exists (value: {masked}). Use this key name at runtime; the full value is loaded automatically."
         else:
             return f"vault_get failed: {result.get('error')}"
 
@@ -1748,7 +1753,9 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
             return "Error: service required"
         result = read_credential(service)
         if result.get("success"):
-            return json.dumps(result.get("credentials", {}))
+            creds = result.get("credentials", {})
+            masked = {k: (v[:4] + "..." + v[-4:] if isinstance(v, str) and len(v) > 8 else "****") for k, v in creds.items()}
+            return f"Credentials for '{service}': {json.dumps(masked)}\nKeys available: {', '.join(creds.keys())}"
         else:
             return f"read_credential failed: {result.get('error')}"
 
