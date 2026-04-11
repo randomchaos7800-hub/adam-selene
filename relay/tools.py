@@ -1130,6 +1130,65 @@ PRIVILEGED_TOOLS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Read/Write classification for parallel execution in relay.py
+# ---------------------------------------------------------------------------
+
+READ_TOOLS: frozenset[str] = frozenset({
+    # Memory reads
+    "read_memory", "search_memory", "list_entities",
+    "read_timeline", "read_tacit", "review_own_conversations",
+    # LIGHTHOUSE reads
+    "lighthouse_read", "lighthouse_search",
+    # Task reads
+    "read_tasks",
+    # IRC reads
+    "list_irc_channels", "get_active_irc_channels",
+    "search_irc_logs", "read_irc_channel",
+    # Config reads
+    "read_my_config",
+    # Filesystem reads
+    "list_files", "read_file", "search_files", "file_info", "list_backups",
+    # Vault/credential reads
+    "vault_get", "read_credential",
+    # GitHub reads
+    "github_get_repo_info", "github_list_repos", "github_get_file_content",
+    # Browser/web reads
+    "browse_url", "screenshot_url", "fetch_url",
+    # Research reads
+    "read_current_investigation",
+})
+
+WRITE_TOOLS: frozenset[str] = frozenset({
+    # Memory writes
+    "write_memory", "update_my_instructions", "log_experiment",
+    # LIGHTHOUSE writes
+    "lighthouse_write", "lighthouse_living",
+    # Task writes
+    "add_task", "complete_task",
+    # Messaging
+    "send_message_to_owner",
+    # Browser (stateful interaction)
+    "browser_interact",
+    # IRC writes
+    "send_irc_message", "update_irc_channels",
+    "restart_irc_bot", "extract_irc_learnings",
+    # Config writes
+    "set_default_model", "update_config_setting", "restart_agent_service",
+    # Filesystem writes
+    "backup_myself", "restore_from_backup",
+    "write_my_code", "edit_my_code", "git_commit",
+    # Vault/credential writes
+    "vault_set", "store_credential",
+    # GitHub writes
+    "github_create_repo", "github_push_file", "github_create_branch",
+    # Shell / sub-agent (always write — side effects unknown)
+    "run_shell", "claude_code",
+    # Research writes
+    "start_investigation", "add_to_agenda",
+})
+
+
 def _is_owner(user_id: str) -> bool:
     """Check if user_id matches the configured owner."""
     return user_id == config.owner_user_id()

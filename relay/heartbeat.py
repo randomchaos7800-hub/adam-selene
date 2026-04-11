@@ -5,6 +5,8 @@ Phase 2 (every 30min idle): Research an agenda item → push to owner if valuabl
 """
 
 import asyncio
+from datetime import datetime
+from difflib import SequenceMatcher
 import json
 import logging
 import re
@@ -76,7 +78,19 @@ class Heartbeat:
             idle = self._idle_minutes()
             logger.info(f"Heartbeat tick — idle {idle:.1f} min")
 
-            # Phase 1: reflection (always, if enough conversation)
+            # Tier 0 + Tier 1 compaction (cheap, deterministic — runs every tick)
+            try:
+                compact_stats = self._compact_memory()
+                if compact_stats["removed"] > 0:
+                    logger.info(
+                        f"Compaction: removed {compact_stats['removed']} duplicate facts "
+                        f"across {compact_stats['entities_checked']} entities "
+                        f"(exact={compact_stats['exact']}, near_dup={compact_stats['near_dup']})"
+                    )
+            except Exception as e:
+                logger.warning(f"Memory compaction failed (non-fatal): {e}")
+
+            # Phase 1 (Tier 2): LLM reflection (always, if enough conversation)
             try:
                 result = await self.reflect()
                 if result:
@@ -104,6 +118,115 @@ class Heartbeat:
         """Resume heartbeat reflections."""
         self.paused = False
         logger.info("Heartbeat resumed")
+
+    # ------------------------------------------------------------------
+    # Tier 0 + Tier 1 compaction (deterministic, no LLM)
+    # Runs before every Tier 2 (LLM) reflection cycle.
+    # ------------------------------------------------------------------
+
+    def _compact_memory(self) -> dict:
+        """Cheap deterministic compaction — runs every heartbeat tick.
+
+        Tier 0: Exact-duplicate deduplication within each entity.
+                Keeps the newest fact, deactivates exact copies.
+
+        Tier 1: Near-duplicate merging (SequenceMatcher ratio > 0.95).
+                Keeps the newest fact, deactivates near-copies.
+
+        Both tiers are deterministic and reversible (deactivate, not delete).
+        A compaction log is appended to <memory_root>/compaction.log for auditability.
+
+        Returns stats dict with keys: removed, exact, near_dup, entities_checked.
+        """
+        memory_path = storage.get_memory_path()
+        entities = storage.load_entities()
+
+        stats = {"removed": 0, "exact": 0, "near_dup": 0, "entities_checked": 0}
+        log_lines = []
+
+        for entity_name, entity_data in entities.items():
+            facts_file = memory_path / entity_data["path"] / "facts.json"
+            if not facts_file.exists():
+                continue
+
+            stats["entities_checked"] += 1
+            facts_data = json.loads(facts_file.read_text())
+            facts = facts_data.get("facts", [])
+
+            # Only consider active facts
+            active = [
+                f for f in facts
+                if f.get("status", "active") == "active" and f.get("active", True)
+            ]
+
+            to_deactivate: set[str] = set()
+
+            # --- Tier 0: exact duplicates ---
+            seen_content: dict[str, str] = {}  # content → newest fact id
+            # Sort by timestamp descending so we keep the newest
+            active_sorted = sorted(
+                active,
+                key=lambda f: f.get("timestamp", f.get("extracted", "")),
+                reverse=True,
+            )
+            for fact in active_sorted:
+                content = fact.get("fact", fact.get("content", "")).strip()
+                if not content:
+                    continue
+                if content in seen_content:
+                    # Duplicate — this one is older (we sorted desc), deactivate it
+                    to_deactivate.add(fact["id"])
+                    log_lines.append(
+                        f"T0 exact-dup [{entity_name}] deactivated {fact['id']}: {content[:60]}"
+                    )
+                    stats["exact"] += 1
+                else:
+                    seen_content[content] = fact["id"]
+
+            # --- Tier 1: near-duplicates (ratio > 0.95) ---
+            # Work on what's still active after Tier 0
+            remaining = [f for f in active_sorted if f["id"] not in to_deactivate]
+            kept_contents: list[tuple[str, str]] = []  # (content, fact_id)
+
+            for fact in remaining:
+                content = fact.get("fact", fact.get("content", "")).strip()
+                if not content:
+                    continue
+                is_near_dup = False
+                for kept_content, kept_id in kept_contents:
+                    ratio = SequenceMatcher(None, content, kept_content).ratio()
+                    if ratio > 0.95:
+                        # Near-duplicate of a kept fact — deactivate this one
+                        to_deactivate.add(fact["id"])
+                        log_lines.append(
+                            f"T1 near-dup [{entity_name}] deactivated {fact['id']} "
+                            f"(ratio={ratio:.2f} vs {kept_id}): {content[:60]}"
+                        )
+                        stats["near_dup"] += 1
+                        is_near_dup = True
+                        break
+                if not is_near_dup:
+                    kept_contents.append((content, fact["id"]))
+
+            # Apply deactivations in-place
+            if to_deactivate:
+                for fact in facts_data["facts"]:
+                    if fact.get("id") in to_deactivate:
+                        fact["status"] = "superseded"
+                        fact["active"] = False
+                        fact["supersededBy"] = "compaction"
+                facts_file.write_text(json.dumps(facts_data, indent=2))
+                stats["removed"] += len(to_deactivate)
+
+        # Write compaction log
+        if log_lines:
+            log_file = memory_path / "compaction.log"
+            timestamp = datetime.now().isoformat()
+            with open(log_file, "a") as f:
+                f.write(f"\n--- {timestamp} ---\n")
+                f.write("\n".join(log_lines) + "\n")
+
+        return stats
 
     def _parse_reflection_json(self, text: str) -> dict:
         """Extract reflection JSON from model output, tolerating formatting issues.
