@@ -7,11 +7,11 @@ Architecture:
 - _execute_reads()  : parallel tool execution via asyncio.gather (READ_TOOLS)
 - _execute_write()  : serial tool execution, stops on first failure (WRITE_TOOLS)
 
-System prompt layout (static → dynamic for API cache efficiency):
+System prompt layout:
   1. Base constitution (agent_prompt.md) — fully static
   2. Memory-stored instruction overlay — changes only via update_my_instructions
-  3. Tool summary — static, generated from TOOL_DEFINITIONS
-  (Future: dynamic memory context appended last)
+  3. Skill context — resolved per-message from skills/ (replaces flat tool summary)
+     Architecture inspired by gbrain (github.com/garrytan/gbrain) by Garry Tan
 
 Sub-agent isolation design note (Principle 7):
   No module-level mutable state except _relay_instance singleton.
@@ -31,6 +31,7 @@ from memory import storage, extraction
 from relay.sessions import SessionStore
 from relay.switchboard import Switchboard
 from relay.tools import TOOL_DEFINITIONS, READ_TOOLS, execute_tool, generate_tool_summary
+from relay import skill_resolver
 from relay import session_log
 from relay.working_memory import log_failure
 from relay import config
@@ -104,17 +105,16 @@ class RelayV3:
     # System prompt — static prefix first for API cache efficiency
     # ------------------------------------------------------------------
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(self, message: str = "") -> str:
         """Assemble system prompt with static content at the top.
 
-        Cache-efficiency layout:
+        Layout:
           Layer 1 (most static): base constitution / agent_prompt.md
           Layer 2 (semi-static): memory-stored instruction overlay (only changes
                                  when agent calls update_my_instructions)
-          Layer 3 (static):      tool summary from TOOL_DEFINITIONS
-          (Future layer 4):      dynamic retrieved memory context — always last
-
-        Keeping layers 1-3 identical across calls maximises API prefix cache hits.
+          Layer 3 (dynamic):     skill context — resolved from message, replaces
+                                 flat tool summary with rich workflow definitions
+                                 (architecture: github.com/garrytan/gbrain)
         """
         # Layer 1+2: base constitution, optionally overridden by memory
         base = _load_base_prompt()
@@ -124,10 +124,12 @@ class RelayV3:
         else:
             static_prefix = base
 
-        # Layer 3: tool summary (deterministic, changes only when tools are added/removed)
-        tool_section = generate_tool_summary()
+        # Layer 3: skill-resolved context (replaces flat tool summary)
+        self._active_skills = skill_resolver.resolve_skills(message)
+        skill_section = skill_resolver.build_skill_prompt(self._active_skills)
+        logger.info(f"Skills resolved: {self._active_skills}")
 
-        return static_prefix + "\n\n---\n\n" + tool_section
+        return static_prefix + "\n\n---\n\n" + skill_section
 
     def _build_context_messages(self, user_id: str) -> list:
         snap = self.session_store.get_session_snapshot(user_id)
@@ -191,7 +193,12 @@ class RelayV3:
 
         msgs = self._build_context_messages(user_id)
         msgs.append({"role": "user", "content": message})
-        sys_prompt = self._build_system_prompt()
+        sys_prompt = self._build_system_prompt(message)
+
+        # Filter tools to only those declared by active skills
+        active_tools = skill_resolver.filter_tool_definitions(self.tools, self._active_skills)
+        active_tool_names = frozenset(t["name"] for t in active_tools)
+        logger.info(f"Tool surface: {len(active_tools)}/{len(self.tools)} tools for skills {self._active_skills}")
 
         yield {"type": "start"}
 
@@ -202,8 +209,8 @@ class RelayV3:
             max_tokens=self.max_output_tokens,
         )
 
-        # --- Initial model call ---
-        resp = await self._call_with_retry(msgs, sys_prompt)
+        # --- Initial model call (with skill-filtered tools) ---
+        resp = await self._call_with_retry(msgs, sys_prompt, active_tools)
         if resp is None:
             msg = "I can't reach any inference backend right now. Will retry on your next message."
             yield {"type": "error", "error_type": "switchboard_failure", "message": msg}
@@ -304,8 +311,8 @@ class RelayV3:
                     }],
                 })
 
-            # --- Follow-up model call ---
-            follow = await self._call_with_retry(msgs, sys_prompt)
+            # --- Follow-up model call (with skill-filtered tools) ---
+            follow = await self._call_with_retry(msgs, sys_prompt, active_tools)
             if follow is None:
                 partial = "".join(b.text for b in resp.content if b.type == "text")
                 msg = "Lost connection to inference backend mid-task."
@@ -316,21 +323,22 @@ class RelayV3:
                 break
 
             # Check for hallucinated tool names — nudge the model once
+            # Uses active_tool_names (skill-filtered) not self._valid_tool_names (all)
             if follow.stop_reason == "tool_use":
                 bad_tools = [
                     b.name for b in follow.content
-                    if b.type == "tool_use" and b.name not in self._valid_tool_names
+                    if b.type == "tool_use" and b.name not in active_tool_names
                 ]
                 if bad_tools:
                     logger.warning(f"Hallucinated tool(s): {bad_tools}")
-                    valid_sample = ", ".join(list(self._valid_tool_names)[:12]) + "..."
+                    valid_sample = ", ".join(sorted(active_tool_names)[:12]) + "..."
                     nudge = (
                         f"Your last response referenced tool(s) that don't exist: {bad_tools}. "
                         f"Available tools include: {valid_sample}. "
                         f"Please continue using only real tool names."
                     )
                     msgs.append({"role": "user", "content": nudge})
-                    follow = await self._call_with_retry(msgs, sys_prompt)
+                    follow = await self._call_with_retry(msgs, sys_prompt, active_tools)
                     if follow is None:
                         yield {
                             "type": "error",
@@ -355,17 +363,19 @@ class RelayV3:
     # Switchboard call with transient retry
     # ------------------------------------------------------------------
 
-    async def _call_with_retry(self, msgs: list, sys_prompt: str, attempt: int = 0):
+    async def _call_with_retry(self, msgs: list, sys_prompt: str, tools: list[dict] = None, attempt: int = 0):
         """Call switchboard. Retries transient errors up to _RETRY_MAX times.
 
         Returns None on total failure (caller must yield an error event).
+        tools: filtered tool definitions for current skill context (defaults to all).
         """
+        active_tools = tools if tools is not None else self.tools
         try:
             return await asyncio.to_thread(
                 self.switchboard.call,
                 messages=msgs,
                 system=sys_prompt,
-                tools=self.tools,
+                tools=active_tools,
                 max_tokens=self.max_output_tokens,
             )
         except Exception as e:
@@ -373,7 +383,7 @@ class RelayV3:
                 delay = _RETRY_BACKOFF[attempt]
                 logger.warning(f"Transient error attempt {attempt + 1}/{_RETRY_MAX}: {e}. Retry in {delay}s.")
                 await asyncio.sleep(delay)
-                return await self._call_with_retry(msgs, sys_prompt, attempt + 1)
+                return await self._call_with_retry(msgs, sys_prompt, tools, attempt + 1)
             logger.error(f"Switchboard failed after {attempt + 1} attempts: {e}")
             log_failure(context="model_call", error=str(e), recovery="Exhausted retries")
             return None

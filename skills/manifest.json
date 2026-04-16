@@ -1,0 +1,70 @@
+{
+  "name": "adam-selene",
+  "version": "1.0.0",
+  "conformance_version": "1.0.0",
+  "description": "Skills layer for Adam Selene — always-on reasoning partner with persistent memory, self-reflection, and constitutional constraints",
+  "skills": [
+    {
+      "name": "signal-detector",
+      "path": "signal-detector/SKILL.md",
+      "description": "Always-on ambient capture. Fires on every message to detect entities, facts, and owner insights."
+    },
+    {
+      "name": "memory-ops",
+      "path": "memory-ops/SKILL.md",
+      "description": "Core memory cycle: memory-first lookup, read-enrich-write loop, fact attribution, decay awareness."
+    },
+    {
+      "name": "query",
+      "path": "query/SKILL.md",
+      "description": "Answer questions using the knowledge graph with entity lookup, fact search, and timeline context."
+    },
+    {
+      "name": "research",
+      "path": "research/SKILL.md",
+      "description": "Multi-step investigation using working memory threads, web research, and synthesis."
+    },
+    {
+      "name": "lighthouse",
+      "path": "lighthouse/SKILL.md",
+      "description": "Self-reflection and reasoning journal. Write observations, corrections, patterns, and identity notes."
+    },
+    {
+      "name": "heartbeat",
+      "path": "heartbeat/SKILL.md",
+      "description": "Autonomous idle behavior: reflection, memory compaction, agenda-driven research, proactive pushes."
+    },
+    {
+      "name": "task-manager",
+      "path": "task-manager/SKILL.md",
+      "description": "Task lifecycle: add, complete, review active tasks."
+    },
+    {
+      "name": "code-ops",
+      "path": "code-ops/SKILL.md",
+      "description": "Self-modification, file operations, git commits, and GitHub repo management."
+    },
+    {
+      "name": "web-research",
+      "path": "web-research/SKILL.md",
+      "description": "Browse URLs, fetch pages, take screenshots, and interact with web content."
+    },
+    {
+      "name": "irc-ops",
+      "path": "irc-ops/SKILL.md",
+      "description": "IRC channel messaging, log search, channel management, and learning extraction."
+    },
+    {
+      "name": "config-ops",
+      "path": "config-ops/SKILL.md",
+      "description": "Runtime configuration: model switching, settings updates, service restart."
+    },
+    {
+      "name": "comms",
+      "path": "comms/SKILL.md",
+      "description": "Proactive messaging to owner via primary interface. Rate-limited, quality-gated."
+    }
+  ],
+  "resolver": "RESOLVER.md",
+  "conventions_dir": "conventions/"
+}
