@@ -3,13 +3,13 @@ set -euo pipefail
 
 # Adam Selene backup script
 # Configurable via environment variables:
-#   SMARTAGENT_BACKUP_DIR  — where to store backups (default: /mnt/backup/smartagent)
+#   SMARTAGENT_BACKUP_DIR  — where to store backups (default: /mnt/jellyfin-backups/smartagent)
 #   SMARTAGENT_MEMORY_DIR  — memory directory name relative to parent (default: adam-selene-memory)
 #   SMARTAGENT_GIT_REMOTE  — git remote URL (optional, skips push if unset)
 #   SMARTAGENT_GIT_TOKEN   — git token for push (optional)
 
 SMARTAGENT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BACKUP_DIR="${SMARTAGENT_BACKUP_DIR:-/mnt/backup/smartagent}"
+BACKUP_DIR="${SMARTAGENT_BACKUP_DIR:-/mnt/jellyfin-backups/smartagent}"
 MEMORY_DIR="${SMARTAGENT_MEMORY_DIR:-adam-selene-memory}"
 DATE=$(date +%Y-%m-%d)
 

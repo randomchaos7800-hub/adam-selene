@@ -198,7 +198,7 @@ class Switchboard:
         settings = json.loads(settings_path.read_text()) if settings_path.exists() else {}
 
         local_cfg = settings.get("local", {})
-        pod_url = local_cfg.get("base_url", "http://127.0.0.1:8081/v1")
+        pod_url = local_cfg.get("base_url", "http://100.120.50.35:8010/v1")
         pod_model = local_cfg.get("model", "smartagent")
         self.POD_URL = pod_url
         self.MODEL = pod_model

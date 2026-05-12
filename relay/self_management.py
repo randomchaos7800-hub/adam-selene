@@ -206,11 +206,11 @@ def backup_myself() -> dict:
 
 def list_backups() -> dict:
     """List available backups on the backup drive."""
-    backup_dir = Path("/mnt/backup")
+    backup_dir = Path("/mnt/jellyfin-backups")
     agent_name = config.agent_name().lower()
     try:
         if not backup_dir.exists():
-            return {"success": False, "error": "Backup drive not mounted at /mnt/backup"}
+            return {"success": False, "error": "Backup drive not mounted at /mnt/jellyfin-backups"}
 
         agent_backups = list(backup_dir.glob(f"{agent_name}*.tar*")) + list(backup_dir.glob(f"{agent_name}/"))
         entries = []
@@ -232,8 +232,8 @@ def restore_from_backup(backup_path: str) -> dict:
     """Restore the agent from a backup. Use list_backups() first to find valid paths."""
     try:
         p = Path(backup_path).resolve()
-        if not str(p).startswith("/mnt/backup"):
-            return {"success": False, "error": "Restore path must be within /mnt/backup"}
+        if not str(p).startswith("/mnt/jellyfin-backups"):
+            return {"success": False, "error": "Restore path must be within /mnt/jellyfin-backups"}
         if not p.exists():
             return {"success": False, "error": f"Backup not found: {p}"}
 

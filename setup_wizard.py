@@ -165,7 +165,7 @@ def generate_settings(identity: dict, owner: dict, interfaces: dict, memory: dic
             "irc": interfaces["irc"]
         },
         "local": {
-            "base_url": "http://127.0.0.1:8081/v1",
+            "base_url": "http://100.120.50.35:8010/v1",
             "model": "gemma4",
             "cmd": []
         },

@@ -197,6 +197,6 @@ MIT. See [LICENSE](LICENSE).
 
 ## Credits
 
-Built by [Vitale Dynamics](https://dinovitale.com). Extracted from a production agent that's been running daily since January 2026. Benchmarked against the field.
+Built by [Boundary Labs](https://dinovitale.com). Extracted from a production agent that's been running daily since January 2026. Benchmarked against the field.
 
 If you build something cool with Adam Selene, tell us about it.

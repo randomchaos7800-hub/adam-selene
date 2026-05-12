@@ -1,7 +1,7 @@
 # Building a Persistent AI Companion
 ## Architecture, Memory, and Personality on Local Hardware
 
-**By Dino Vitale — Vitale Dynamics LLC**
+**By Dino Vitale — Cha0tik LLC**
 **April 2026**
 
 ---
