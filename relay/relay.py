@@ -7,11 +7,12 @@ Architecture:
 - _execute_reads()  : parallel tool execution via asyncio.gather (READ_TOOLS)
 - _execute_write()  : serial tool execution, stops on first failure (WRITE_TOOLS)
 
-System prompt layout:
+System prompt layout (static → dynamic for API cache efficiency):
   1. Base constitution (agent_prompt.md) — fully static
   2. Memory-stored instruction overlay — changes only via update_my_instructions
   3. Skill context — resolved per-message from skills/ (replaces flat tool summary)
      Architecture inspired by gbrain (github.com/garrytan/gbrain) by Garry Tan
+  4. Memory pre-fetch — top-5 knowledge graph facts relevant to current message
 
 Sub-agent isolation design note (Principle 7):
   No module-level mutable state except _relay_instance singleton.
@@ -48,6 +49,38 @@ _RETRY_BACKOFF = [1, 3]  # seconds before retry 1 and retry 2
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_STOPWORDS = frozenset({
+    "the", "and", "for", "that", "this", "with", "have", "from", "not",
+    "but", "are", "was", "you", "your", "what", "how", "why", "when",
+    "can", "will", "just", "its", "about", "been", "they", "them", "then",
+    "said", "also", "would", "could", "should", "there", "here", "some",
+    "like", "think", "know", "doing", "want", "need", "make", "work",
+    "working", "using", "going", "getting", "looking", "trying", "running",
+    "something", "anything", "everything", "nothing", "someone", "anyone",
+    "tell", "come", "give", "take", "very", "much", "more", "most", "good",
+    "well", "back", "time", "even", "into", "been", "does", "didn", "isn",
+    "lately", "recent", "thinking", "doing", "feels", "still",
+})
+
+
+def _extract_search_terms(message: str) -> list[str]:
+    """Pull up to 3 substantive search terms from a message for memory pre-fetch.
+
+    Sorts by length descending so more specific terms (longer = less ambiguous)
+    rank first. Min 4 chars to catch short names like 'mike', 'kato', 'dino'.
+    """
+    import re
+    words = re.findall(r'\b[a-zA-Z]{4,}\b', message)
+    words_sorted = sorted(set(w.lower() for w in words), key=len, reverse=True)
+    terms: list[str] = []
+    for wl in words_sorted:
+        if wl not in _STOPWORDS:
+            terms.append(wl)
+        if len(terms) >= 3:
+            break
+    return terms
+
 
 def _load_settings() -> dict:
     return json.loads(SETTINGS_PATH.read_text()) if SETTINGS_PATH.exists() else {}
@@ -105,8 +138,51 @@ class RelayV3:
     # System prompt — static prefix first for API cache efficiency
     # ------------------------------------------------------------------
 
+    def _build_memory_context(self, message: str) -> str:
+        """Pre-fetch relevant facts from the knowledge graph as dynamic context.
+
+        Extracts search terms from the incoming message, queries the fact store,
+        and returns a compact ## Relevant Memory block with the top-5 scored facts.
+        Appended last so layers 1-3 remain eligible for API prompt caching.
+        Never raises — any failure returns empty string (graceful degradation).
+        """
+        try:
+            terms = _extract_search_terms(message)
+            if not terms:
+                return ""
+
+            candidates: list[dict] = []
+            seen_texts: set[str] = set()
+
+            for term in terms:
+                for hit in storage.search_facts(term):
+                    fact_text = hit["fact"].get("fact", hit["fact"].get("content", ""))
+                    if not fact_text or fact_text in seen_texts:
+                        continue
+                    seen_texts.add(fact_text)
+                    candidates.append(hit)
+
+            if not candidates:
+                return ""
+
+            candidates.sort(key=lambda x: x["relevance_score"], reverse=True)
+            top = candidates[:5]
+
+            lines = ["## Relevant Memory"]
+            for hit in top:
+                entity = hit["entity"]
+                fact_text = hit["fact"].get("fact", hit["fact"].get("content", ""))
+                cat = hit["fact"].get("category", "")
+                tag = f" [{cat}]" if cat else ""
+                lines.append(f"- {entity}: {fact_text}{tag}")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.debug(f"_build_memory_context non-fatal: {e}")
+            return ""
+
     def _build_system_prompt(self, message: str = "") -> str:
-        """Assemble system prompt with static content at the top.
+        """Assemble system prompt with static content at the top for API cache efficiency.
 
         Layout:
           Layer 1 (most static): base constitution / agent_prompt.md
@@ -115,6 +191,8 @@ class RelayV3:
           Layer 3 (dynamic):     skill context — resolved from message, replaces
                                  flat tool summary with rich workflow definitions
                                  (architecture: github.com/garrytan/gbrain)
+          Layer 4 (most dynamic): pre-fetched memory context from knowledge graph
+                                  appended last so layers 1-3 remain cache-eligible
         """
         # Layer 1+2: base constitution, optionally overridden by memory
         base = _load_base_prompt()
@@ -129,7 +207,14 @@ class RelayV3:
         skill_section = skill_resolver.build_skill_prompt(self._active_skills)
         logger.info(f"Skills resolved: {self._active_skills}")
 
-        return static_prefix + "\n\n---\n\n" + skill_section
+        # Layer 4: dynamic memory pre-fetch
+        parts = [static_prefix, skill_section]
+        memory_ctx = self._build_memory_context(message)
+        if memory_ctx:
+            parts.append(memory_ctx)
+            logger.debug(f"Memory pre-fetch: injected {memory_ctx.count(chr(10))} facts")
+
+        return "\n\n---\n\n".join(parts)
 
     def _build_context_messages(self, user_id: str) -> list:
         snap = self.session_store.get_session_snapshot(user_id)
