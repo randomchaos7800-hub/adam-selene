@@ -28,6 +28,9 @@ import time
 from pathlib import Path
 from typing import AsyncGenerator
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / "config" / "secrets.env")
+
 from memory import storage, extraction
 from relay.sessions import SessionStore
 from relay.switchboard import Switchboard

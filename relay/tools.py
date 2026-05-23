@@ -1270,10 +1270,16 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
         if not entity or not fact:
             return "Need both entity and fact to save."
 
-        # Check if entity exists
+        # Resolve or auto-create entity
         resolved = storage.resolve_entity(entity)
         if not resolved:
-            return f"Unknown entity '{entity}'. I don't have that in my memory yet."
+            try:
+                storage.add_entity(entity, category="people")
+                resolved = entity.lower().replace(" ", "_")
+            except ValueError:
+                resolved = entity.lower().replace(" ", "_")
+            except Exception as e:
+                return f"Failed to create entity '{entity}': {e}"
 
         try:
             fact_id = storage.add_fact(resolved, category, fact, source="agent_conversation")
