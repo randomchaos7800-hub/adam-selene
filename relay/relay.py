@@ -141,81 +141,46 @@ class RelayV3:
     # System prompt — static prefix first for API cache efficiency
     # ------------------------------------------------------------------
 
-    def _build_memory_context(self, message: str) -> str:
-        """Pre-fetch relevant facts from the knowledge graph as dynamic context.
-
-        Extracts search terms from the incoming message, queries the fact store,
-        and returns a compact ## Relevant Memory block with the top-5 scored facts.
-        Appended last so layers 1-3 remain eligible for API prompt caching.
-        Never raises — any failure returns empty string (graceful degradation).
-        """
-        try:
-            terms = _extract_search_terms(message)
-            if not terms:
-                return ""
-
-            candidates: list[dict] = []
-            seen_texts: set[str] = set()
-
-            for term in terms:
-                for hit in storage.search_facts(term):
-                    fact_text = hit["fact"].get("fact", hit["fact"].get("content", ""))
-                    if not fact_text or fact_text in seen_texts:
-                        continue
-                    seen_texts.add(fact_text)
-                    candidates.append(hit)
-
-            if not candidates:
-                return ""
-
-            candidates.sort(key=lambda x: x["relevance_score"], reverse=True)
-            top = candidates[:5]
-
-            lines = ["## Relevant Memory"]
-            for hit in top:
-                entity = hit["entity"]
-                fact_text = hit["fact"].get("fact", hit["fact"].get("content", ""))
-                cat = hit["fact"].get("category", "")
-                tag = f" [{cat}]" if cat else ""
-                lines.append(f"- {entity}: {fact_text}{tag}")
-
-            return "\n".join(lines)
-        except Exception as e:
-            logger.debug(f"_build_memory_context non-fatal: {e}")
-            return ""
-
     def _build_system_prompt(self, message: str = "") -> str:
-        """Assemble system prompt with static content at the top for API cache efficiency.
+        """Assemble system prompt. Stable layers first for API cache efficiency.
 
-        Layout:
-          Layer 1 (most static): base constitution / agent_prompt.md
-          Layer 2 (semi-static): memory-stored instruction overlay (only changes
-                                 when agent calls update_my_instructions)
-          Layer 3 (dynamic):     skill context — resolved from message, replaces
-                                 flat tool summary with rich workflow definitions
-                                 (architecture: github.com/garrytan/gbrain)
-          Layer 4 (most dynamic): pre-fetched memory context from knowledge graph
-                                  appended last so layers 1-3 remain cache-eligible
+        Layout (Hermes-inspired, gbrain skill architecture):
+          Layer 1 (static):      base constitution / agent_prompt.md
+          Layer 2 (semi-static): memory-stored instruction overlay
+          Layer 3 (stable):      RESOLVER.md only — agent reads full skill bodies
+                                 on demand via read_skill tool (thin harness pattern)
+          Layer 4 (volatile):    MEMORY.md + USER.md snapshots — session-stable
+                                 ambient context, frozen at session start like Hermes.
+                                 Deep lookup still available via search_memory tool.
         """
-        # Layer 1+2: base constitution, optionally overridden by memory
+        # Layer 1+2: constitution / memory overlay
         base = _load_base_prompt()
         memory_prompt = storage.load_system_prompt_from_memory()
-        if memory_prompt and memory_prompt.strip() != base.strip():
-            static_prefix = memory_prompt  # Agent has updated its own instructions
-        else:
-            static_prefix = base
+        static_prefix = (
+            memory_prompt if (memory_prompt and memory_prompt.strip() != base.strip())
+            else base
+        )
 
-        # Layer 3: skill-resolved context (replaces flat tool summary)
+        # Layer 3: resolver only — ~50 lines, stable across messages
         self._active_skills = skill_resolver.resolve_skills(message)
-        skill_section = skill_resolver.build_skill_prompt(self._active_skills)
-        logger.info(f"Skills resolved: {self._active_skills}")
+        logger.info(f"Skills resolved (tool-filtering): {self._active_skills}")
+        resolver_section = skill_resolver.build_skill_prompt()
 
-        # Layer 4: dynamic memory pre-fetch
-        parts = [static_prefix, skill_section]
-        memory_ctx = self._build_memory_context(message)
-        if memory_ctx:
-            parts.append(memory_ctx)
-            logger.debug(f"Memory pre-fetch: injected {memory_ctx.count(chr(10))} facts")
+        # Layer 4: session-stable ambient memory (volatile tier, bottom of prompt)
+        parts = [static_prefix, resolver_section]
+        ambient = []
+
+        memory_md = storage.read_tacit()
+        if memory_md and "(Not yet populated)" not in memory_md and memory_md.strip():
+            ambient.append(f"## Memory\n\n{memory_md.strip()}")
+
+        user_md = storage.read_user_profile()
+        if user_md and "(Not yet populated)" not in user_md and user_md.strip():
+            ambient.append(f"## {config.owner_name()}\n\n{user_md.strip()}")
+
+        if ambient:
+            parts.append("\n\n".join(ambient))
+            logger.debug(f"Ambient memory injected: {len(ambient)} block(s)")
 
         return "\n\n---\n\n".join(parts)
 

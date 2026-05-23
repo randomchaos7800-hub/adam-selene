@@ -104,6 +104,10 @@ def init_memory() -> None:
     if not memory_file.exists():
         _write_text_locked(memory_file, "# How Your Owner Thinks\n\n(Not yet populated)\n")
 
+    user_file = root / "USER.md"
+    if not user_file.exists():
+        _write_text_locked(user_file, "(Not yet populated)\n")
+
     experiments_file = root / "experiments" / "learning_log.json"
     if not experiments_file.exists():
         _write_text_locked(experiments_file, json.dumps([], indent=2))
@@ -433,18 +437,42 @@ def append_timeline(date: str, entry: str) -> None:
 
 # --- Tacit knowledge ---
 
+MEMORY_MD_MAX_CHARS = 2200
+USER_MD_MAX_CHARS = 1400
+
+
 def read_tacit() -> str:
-    """Read tacit knowledge (MEMORY.md)."""
+    """Read tacit knowledge (MEMORY.md) — injected into every session prompt."""
     memory_file = get_memory_path() / "MEMORY.md"
     if not memory_file.exists():
-        return "(No tacit knowledge recorded yet)"
+        return "(Not yet populated)"
     return memory_file.read_text()
 
 
 def write_tacit(content: str) -> None:
-    """Write tacit knowledge (MEMORY.md)."""
+    """Write tacit knowledge (MEMORY.md), capped at MEMORY_MD_MAX_CHARS."""
+    if len(content) > MEMORY_MD_MAX_CHARS:
+        content = content[:MEMORY_MD_MAX_CHARS]
+        logger.warning(f"MEMORY.md truncated to {MEMORY_MD_MAX_CHARS} chars")
     memory_file = get_memory_path() / "MEMORY.md"
     _write_text_locked(memory_file, content)
+
+
+def read_user_profile() -> str:
+    """Read the owner profile (USER.md) — injected into every session prompt."""
+    user_file = get_memory_path() / "USER.md"
+    if not user_file.exists():
+        return "(Not yet populated)"
+    return user_file.read_text()
+
+
+def write_user_profile(content: str) -> None:
+    """Write the owner profile (USER.md), capped at USER_MD_MAX_CHARS."""
+    if len(content) > USER_MD_MAX_CHARS:
+        content = content[:USER_MD_MAX_CHARS]
+        logger.warning(f"USER.md truncated to {USER_MD_MAX_CHARS} chars")
+    user_file = get_memory_path() / "USER.md"
+    _write_text_locked(user_file, content)
 
 
 # --- Prompt versioning ---

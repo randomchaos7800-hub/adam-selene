@@ -14,6 +14,8 @@ tools:
   - write_memory
   - read_timeline
   - read_tacit
+  - write_user_memory
+  - read_skill
   - review_own_conversations
   - update_my_instructions
   - log_experiment

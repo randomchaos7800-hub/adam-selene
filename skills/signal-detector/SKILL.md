@@ -11,6 +11,7 @@ tools:
   - read_memory
   - search_memory
   - write_memory
+  - write_user_memory
   - log_experiment
 mutating: true
 ---

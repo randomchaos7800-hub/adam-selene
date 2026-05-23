@@ -239,42 +239,17 @@ def filter_tool_definitions(tool_definitions: list[dict], skill_names: list[str]
     return [t for t in tool_definitions if t["name"] in allowed_tools]
 
 
-def build_skill_prompt(skill_names: list[str]) -> str:
-    """Build the skill context section for the system prompt.
+def build_skill_prompt() -> str:
+    """Return the RESOLVER.md dispatch table — the only skill context pre-injected.
 
-    Assembles:
-    1. Resolver overview (so the model understands skill routing)
-    2. Active conventions (cross-cutting rules)
-    3. Full SKILL.md for each resolved skill
-
-    This replaces the flat tool summary with rich workflow context.
+    Skills are fat; the harness is thin. Full SKILL.md bodies are loaded on-demand
+    by the agent via the read_skill tool when RESOLVER.md directs it. This keeps
+    the system prompt under ~3K chars (vs 15K with all skill bodies), making it
+    viable for local models and maximising prompt cache hit rate.
     """
-    sections = []
-
-    # Header with credit
-    sections.append(
-        "## Active Skills\n\n"
-        "_Skills architecture inspired by [gbrain](https://github.com/garrytan/gbrain) by Garry Tan._\n"
-    )
-
-    # Load conventions (always included)
-    for conv_name in ("memory-first.md", "l0-constraints.md", "owner-auth.md"):
-        conv = load_convention(conv_name)
-        if conv:
-            sections.append(f"### Convention: {conv_name.replace('.md', '')}\n\n{conv}\n")
-
-    # Load each active skill
-    for name in skill_names:
-        content = load_skill(name)
-        if content:
-            sections.append(f"### Skill: {name}\n\n{content}\n")
-
-    # Append resolver summary for disambiguation
     if RESOLVER_PATH.exists():
-        resolver = RESOLVER_PATH.read_text()
-        sections.append(f"### Skill Resolver (reference)\n\n{resolver}\n")
-
-    return "\n---\n\n".join(sections)
+        return RESOLVER_PATH.read_text()
+    return ""
 
 
 def reload():

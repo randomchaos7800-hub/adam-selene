@@ -201,11 +201,39 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "read_tacit",
-        "description": "Read your knowledge about how your owner thinks — their preferences, decision patterns, and communication style.",
+        "description": "Read your MEMORY.md — curated facts about the world injected into every session. Use for deeper inspection or before rewriting it.",
         "input_schema": {
             "type": "object",
             "properties": {},
             "required": []
+        }
+    },
+    {
+        "name": "write_user_memory",
+        "description": "Update USER.md — the owner profile injected into every session. Captures how the owner thinks, communicates, and makes decisions. Write the full updated content; it replaces the current file. Keep it under 1400 chars total.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Full updated USER.md content (replaces existing)"
+                }
+            },
+            "required": ["content"]
+        }
+    },
+    {
+        "name": "read_skill",
+        "description": "Load the full workflow instructions for a named skill. Use when RESOLVER.md tells you which skill to follow — read it before acting. Returns the complete SKILL.md.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill name (e.g., 'memory-ops', 'research', 'code-ops', 'query')"
+                }
+            },
+            "required": ["name"]
         }
     },
     {
@@ -1136,7 +1164,7 @@ PRIVILEGED_TOOLS = {
 READ_TOOLS: frozenset[str] = frozenset({
     # Memory reads
     "read_memory", "search_memory", "list_entities",
-    "read_timeline", "read_tacit", "review_own_conversations",
+    "read_timeline", "read_tacit", "review_own_conversations", "read_skill",
     # LIGHTHOUSE reads
     "lighthouse_read", "lighthouse_search",
     # Task reads
@@ -1296,6 +1324,24 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
 
     elif tool_name == "read_tacit":
         return storage.read_tacit()
+
+    elif tool_name == "write_user_memory":
+        content = tool_input.get("content", "")
+        if not content:
+            return "Content required."
+        storage.write_user_profile(content)
+        return f"User profile updated ({len(content)} chars)."
+
+    elif tool_name == "read_skill":
+        name = tool_input.get("name", "").strip()
+        if not name:
+            return "Skill name required."
+        from relay import skill_resolver
+        content = skill_resolver.load_skill(name)
+        if content is None:
+            available = [s["name"] for s in skill_resolver._load_manifest().get("skills", [])]
+            return f"Skill '{name}' not found. Available: {', '.join(available)}"
+        return content
 
     elif tool_name == "review_own_conversations":
         hours = tool_input.get("hours", 24)
