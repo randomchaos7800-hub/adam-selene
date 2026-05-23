@@ -20,15 +20,12 @@ Memory structure:
 
 import json
 import logging
-import os
-import tempfile
 import uuid
-from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, TypeVar
 
-import fcntl
+from relay.fs_utils import atomic_write_text as _atomic_write_text, exclusive_lock as _exclusive_lock
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -56,32 +53,6 @@ def _normalize_entities(data: object) -> dict:
             return nested
         return data
     return {}
-
-
-def _lock_file_for(path: Path) -> Path:
-    return path.parent / f".{path.name}.lock"
-
-
-@contextmanager
-def _exclusive_lock(path: Path):
-    lock_file = _lock_file_for(path)
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_file, "a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-
-def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, encoding="utf-8") as tmp:
-        tmp.write(content)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp_path = Path(tmp.name)
-    os.replace(tmp_path, path)
 
 
 def _write_text_locked(path: Path, content: str) -> None:

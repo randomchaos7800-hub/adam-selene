@@ -11,17 +11,14 @@ Use replay_session.py to reconstruct any session as a readable trace.
 
 import json
 import logging
-import os
-import tempfile
 import threading
 import time
 import uuid
-import fcntl
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from relay import config
+from relay.fs_utils import atomic_write_text as _atomic_write_text, exclusive_lock as _exclusive_lock
 
 logger = logging.getLogger(__name__)
 
@@ -33,31 +30,6 @@ def _sessions_dir() -> Path:
 def _index_file() -> Path:
     return _sessions_dir() / "index.json"
 
-
-def _lock_file_for(path: Path) -> Path:
-    return path.parent / f".{path.name}.lock"
-
-
-@contextmanager
-def _exclusive_lock(path: Path):
-    lock_file = _lock_file_for(path)
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_file, "a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-
-def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, encoding="utf-8") as tmp:
-        tmp.write(content)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp_path = Path(tmp.name)
-    os.replace(tmp_path, path)
 
 _local = threading.local()  # thread-local current session
 
