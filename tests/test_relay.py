@@ -9,6 +9,7 @@ import sys
 
 sys.modules.setdefault("openai", SimpleNamespace(OpenAI=Mock()))
 sys.modules.setdefault("httpx", SimpleNamespace(get=Mock()))
+sys.modules.setdefault("dotenv", SimpleNamespace(load_dotenv=lambda *args, **kwargs: None))
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -16,19 +17,17 @@ from relay.relay import RelayV3
 
 
 class TestRelayHelpers(unittest.TestCase):
-    def test_build_memory_context_uses_search_results(self):
-        with patch("relay.relay.storage.search_facts") as mock_search:
-            relay = RelayV3.__new__(RelayV3)
-            mock_search.return_value = [{
-                "entity": "project_x",
-                "fact": {"fact": "Project X ships next week", "category": "milestone"},
-                "relevance_score": 2,
-            }]
-
-            context = RelayV3._build_memory_context(relay, "Tell me about Project X")
-
-        self.assertIn("## Relevant Memory", context)
-        self.assertIn("project_x: Project X ships next week [milestone]", context)
+    def test_build_system_prompt_includes_resolver(self):
+        relay = RelayV3.__new__(RelayV3)
+        with patch("relay.relay._load_base_prompt", return_value="[base]"), \
+             patch("relay.relay.storage.load_system_prompt_from_memory", return_value=""), \
+             patch("relay.relay.storage.read_tacit", return_value=""), \
+             patch("relay.relay.storage.read_user_profile", return_value=""), \
+             patch("relay.relay.skill_resolver.resolve_skills", return_value=["signal-detector", "query"]), \
+             patch("relay.relay.skill_resolver.build_skill_prompt", return_value="[RESOLVER]"):
+            prompt = relay._build_system_prompt("hello")
+        self.assertIn("[base]", prompt)
+        self.assertIn("[RESOLVER]", prompt)
 
     def test_format_result_wraps_exceptions_as_json(self):
         relay = RelayV3.__new__(RelayV3)
