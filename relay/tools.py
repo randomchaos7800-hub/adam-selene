@@ -1842,21 +1842,21 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
         if result.get("success"):
             # Format successful response based on tool type
             if tool_name == "github_create_repo":
-                return f"{result.get('message')}\n\nRepository URL: {result.get('url')}"
+                return f"{result.get('message')}\n\nRepository URL: {result.get('repo_url')}"
 
             elif tool_name == "github_push_file":
-                return f"{result.get('message')}\n\nCommit URL: {result.get('url')}"
+                return f"{result.get('message')}\n\nCommit URL: {result.get('commit_url')}"
 
             elif tool_name == "github_get_repo_info":
-                info = result.get("info", {})
-                lines = [f"Repository: {info.get('full_name')}"]
-                lines.append(f"  Description: {info.get('description', 'No description')}")
+                info = result.get("repo", {})
+                lines = [f"Repository: {info.get('name')}"]
+                lines.append(f"  Description: {info.get('description') or 'No description'}")
                 lines.append(f"  Default branch: {info.get('default_branch')}")
-                lines.append(f"  Stars: {info.get('stargazers_count', 0)}")
-                lines.append(f"  Forks: {info.get('forks_count', 0)}")
                 lines.append(f"  Language: {info.get('language', 'Unknown')}")
                 lines.append(f"  Private: {info.get('private', False)}")
-                lines.append(f"  URL: {info.get('html_url')}")
+                lines.append(f"  Clone URL: {info.get('clone_url')}")
+                lines.append(f"  SSH URL: {info.get('ssh_url')}")
+                lines.append(f"  URL: {info.get('url')}")
                 return "\n".join(lines)
 
             elif tool_name == "github_list_repos":
@@ -1866,10 +1866,10 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
 
                 lines = [f"Found {len(repos)} repositories:\n"]
                 for repo in repos[:30]:  # Show max 30
-                    stars = repo.get("stargazers_count", 0)
                     private = " [PRIVATE]" if repo.get("private") else ""
                     desc = repo.get("description", "No description")[:60]
-                    lines.append(f"  {repo['name']}{private} - {desc} ({stars} stars)")
+                    language = repo.get("language") or "Unknown"
+                    lines.append(f"  {repo['name']}{private} - {desc} [{language}]")
 
                 if len(repos) > 30:
                     lines.append(f"\n...and {len(repos) - 30} more")
@@ -1877,11 +1877,13 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
                 return "\n".join(lines)
 
             elif tool_name == "github_create_branch":
-                return f"{result.get('message')}\n\nBranch: {result.get('branch_name')}"
+                branch_name = tool_input.get("branch_name", "")
+                return f"{result.get('message')}\n\nBranch: {branch_name}"
 
             elif tool_name == "github_get_file_content":
-                content = result.get("content", "")
-                path = result.get("path", "")
+                file_info = result.get("file", {})
+                content = file_info.get("content", "")
+                path = file_info.get("path", "")
                 # Truncate long content
                 if len(content) > 5000:
                     content = content[:5000] + f"\n\n[Content truncated - file has {len(content)} characters total]"

@@ -44,6 +44,25 @@ class TestToolDispatch(unittest.TestCase):
         self.assertIn("Updated heartbeat.idle_minutes", result)
         self.assertEqual(cfg["heartbeat"]["idle_minutes"], 30)
 
+    def test_github_create_repo_formats_repo_url(self):
+        with patch("relay.github_tools.execute_github_tool", return_value={
+            "success": True,
+            "message": "created",
+            "repo_url": "https://github.com/example/repo",
+        }):
+            result = execute_tool("github_create_repo", {"repo_name": "repo"}, user_id="owner")
+
+        self.assertIn("Repository URL: https://github.com/example/repo", result)
+
+    def test_github_get_file_content_formats_nested_result(self):
+        with patch("relay.github_tools.execute_github_tool", return_value={
+            "success": True,
+            "file": {"path": "README.md", "content": "hello"},
+        }):
+            result = execute_tool("github_get_file_content", {"repo_name": "repo", "file_path": "README.md"}, user_id="owner")
+
+        self.assertEqual(result, "File: README.md\n\nhello")
+
 
 if __name__ == "__main__":
     unittest.main()

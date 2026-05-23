@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from relay import config
+from relay.fs_utils import read_json_file, update_json_file, write_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,8 @@ def _now() -> str:
 
 def _load() -> dict:
     f = _working_memory_file()
-    if not f.exists():
-        return {"active_thread": None, "archived_threads": []}
     try:
-        return json.loads(f.read_text())
+        return read_json_file(f, {"active_thread": None, "archived_threads": []})
     except Exception as e:
         logger.error(f"working_memory load error: {e}")
         return {"active_thread": None, "archived_threads": []}
@@ -45,8 +44,7 @@ def _load() -> dict:
 
 def _save(data: dict) -> None:
     f = _working_memory_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(data, indent=2))
+    write_json_file(f, data)
 
 
 class WorkingThread:
@@ -67,9 +65,11 @@ class WorkingThread:
             "cycle_count": 0,
             "status": "active",
         }
-        wm = _load()
-        wm["active_thread"] = data
-        _save(wm)
+        update_json_file(
+            _working_memory_file(),
+            {"active_thread": None, "archived_threads": []},
+            lambda wm: wm.__setitem__("active_thread", data),
+        )
         logger.info(f"WorkingThread started: '{data['title']}'")
         return cls(data)
 
@@ -172,17 +172,24 @@ class WorkingThread:
         return "\n".join(lines)
 
     def _flush(self) -> None:
-        wm = _load()
-        wm["active_thread"] = self._data
-        _save(wm)
+        update_json_file(
+            _working_memory_file(),
+            {"active_thread": None, "archived_threads": []},
+            lambda wm: wm.__setitem__("active_thread", self._data),
+        )
 
     def _archive(self) -> None:
-        wm = _load()
-        wm["active_thread"] = None
-        archived = wm.get("archived_threads", [])
-        archived.insert(0, self._data)
-        wm["archived_threads"] = archived[:20]  # keep last 20
-        _save(wm)
+        def _update_archive(wm: dict) -> None:
+            wm["active_thread"] = None
+            archived = wm.get("archived_threads", [])
+            archived.insert(0, self._data)
+            wm["archived_threads"] = archived[:20]
+
+        update_json_file(
+            _working_memory_file(),
+            {"active_thread": None, "archived_threads": []},
+            _update_archive,
+        )
 
 
 def get_active_thread() -> WorkingThread | None:
@@ -239,10 +246,8 @@ def read_status() -> dict:
 
 def _load_failures() -> list:
     f = _failure_log_file()
-    if not f.exists():
-        return []
     try:
-        return json.loads(f.read_text())
+        return read_json_file(f, [])
     except Exception as e:
         logger.error(f"failure_log load error: {e}")
         return []
@@ -250,22 +255,23 @@ def _load_failures() -> list:
 
 def _save_failures(failures: list) -> None:
     f = _failure_log_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(failures, indent=2))
+    write_json_file(f, failures)
 
 
 def log_failure(context: str, error: str, recovery: str = "") -> None:
     """Log a tool or investigation failure so it's visible on next turn."""
-    failures = _load_failures()
     entry = {
         "timestamp": _now(),
         "context": context,  # what was happening
         "error": error,      # what went wrong
         "recovery": recovery, # what I'm doing about it
     }
-    failures.append(entry)
-    failures = failures[-20:]  # keep last 20
-    _save_failures(failures)
+
+    def _append(failures: list) -> None:
+        failures.append(entry)
+        del failures[:-20]
+
+    update_json_file(_failure_log_file(), [], _append)
     logger.warning(f"Failure logged: {context} -- {error}")
 
 

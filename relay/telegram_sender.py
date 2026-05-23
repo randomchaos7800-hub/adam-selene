@@ -4,8 +4,11 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import fcntl
+from contextlib import contextmanager
 from telegram import Bot
 from dotenv import load_dotenv
 
@@ -22,17 +25,63 @@ STATE_FILE = config.memory_root() / "conversation_state.json"
 CONVERSATION_TIMEOUT_MINUTES = 15
 
 
-def get_conversation_state() -> dict:
-    """Load conversation state."""
-    if not STATE_FILE.exists():
+def _state_file() -> Path:
+    return config.memory_root() / "conversation_state.json"
+
+
+def _lock_file_for(path: Path) -> Path:
+    return path.parent / f".{path.name}.lock"
+
+
+@contextmanager
+def _exclusive_lock(path: Path):
+    lock_file = _lock_file_for(path)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_file, "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, encoding="utf-8") as tmp:
+        tmp.write(content)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
+
+
+def _load_state_unlocked(path: Path) -> dict:
+    if not path.exists():
         return {
             "state": "WAITING",
             "last_activity": None,
-            "initiation_sent_at": None
-        }
+            "initiation_sent_at": None,
+    }
+    return json.loads(path.read_text())
 
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso_to_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def get_conversation_state() -> dict:
+    """Load conversation state."""
+    state_file = _state_file()
     try:
-        return json.loads(STATE_FILE.read_text())
+        with _exclusive_lock(state_file):
+            return _load_state_unlocked(state_file)
     except Exception as e:
         logger.error(f"Error loading state: {e}")
         return {"state": "WAITING", "last_activity": None, "initiation_sent_at": None}
@@ -40,9 +89,10 @@ def get_conversation_state() -> dict:
 
 def save_conversation_state(state: dict):
     """Save conversation state."""
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, indent=2))
-    os.chmod(STATE_FILE, 0o600)
+    state_file = _state_file()
+    with _exclusive_lock(state_file):
+        _atomic_write_text(state_file, json.dumps(state, indent=2))
+        os.chmod(state_file, 0o600)
 
 
 def can_send_message() -> tuple[bool, str]:
@@ -52,8 +102,8 @@ def can_send_message() -> tuple[bool, str]:
 
     # Check for timeout (conversation ended)
     if current_state == "IN_CONVERSATION" and state.get("last_activity"):
-        last_activity = datetime.fromisoformat(state["last_activity"])
-        if datetime.utcnow() - last_activity > timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES):
+        last_activity = _iso_to_utc(state["last_activity"])
+        if _utc_now() - last_activity > timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES):
             # Conversation timed out - reset to WAITING
             state["state"] = "WAITING"
             state["last_activity"] = None
@@ -75,8 +125,9 @@ def mark_initiation_sent():
     """Mark that the agent sent an initiation message."""
     state = get_conversation_state()
     state["state"] = "WAITING_FOR_RESPONSE"
-    state["initiation_sent_at"] = datetime.utcnow().isoformat()
-    state["last_activity"] = datetime.utcnow().isoformat()
+    now = _utc_now().isoformat()
+    state["initiation_sent_at"] = now
+    state["last_activity"] = now
     save_conversation_state(state)
     logger.info("Initiation sent - state: WAITING_FOR_RESPONSE")
 
@@ -85,7 +136,7 @@ def mark_owner_responded():
     """Mark that the owner responded - conversation is now open."""
     state = get_conversation_state()
     state["state"] = "IN_CONVERSATION"
-    state["last_activity"] = datetime.utcnow().isoformat()
+    state["last_activity"] = _utc_now().isoformat()
     save_conversation_state(state)
     logger.info(f"{config.owner_name()} responded - state: IN_CONVERSATION")
 
@@ -94,7 +145,7 @@ def mark_agent_message_in_conversation():
     """Update activity timestamp during conversation."""
     state = get_conversation_state()
     if state.get("state") == "IN_CONVERSATION":
-        state["last_activity"] = datetime.utcnow().isoformat()
+        state["last_activity"] = _utc_now().isoformat()
         save_conversation_state(state)
 
 
@@ -125,24 +176,49 @@ async def _send_telegram_message(text: str) -> dict:
 
 def send_message_to_owner(text: str) -> dict:
     """Send a message to the owner via Telegram. Conversation-aware rate limiting."""
-    # Check rate limit
-    can_send, reason = can_send_message()
-    if not can_send:
-        return {"success": False, "error": reason}
+    state_file = _state_file()
+    with _exclusive_lock(state_file):
+        state = _load_state_unlocked(state_file)
+        current_state = state.get("state", "WAITING")
 
-    state = get_conversation_state()
-    current_state = state.get("state", "WAITING")
+        if current_state == "IN_CONVERSATION" and state.get("last_activity"):
+            last_activity = _iso_to_utc(state["last_activity"])
+            if _utc_now() - last_activity > timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES):
+                state["state"] = "WAITING"
+                state["last_activity"] = None
+                current_state = "WAITING"
+                _atomic_write_text(state_file, json.dumps(state, indent=2))
+                os.chmod(state_file, 0o600)
+                logger.info("Conversation timed out - reset to WAITING")
+
+        if current_state == "WAITING":
+            state["state"] = "WAITING_FOR_RESPONSE"
+            now = _utc_now().isoformat()
+            state["initiation_sent_at"] = now
+            state["last_activity"] = now
+            _atomic_write_text(state_file, json.dumps(state, indent=2))
+            os.chmod(state_file, 0o600)
+        elif current_state == "WAITING_FOR_RESPONSE":
+            return {"success": False, "error": f"Already sent initiation - waiting for {config.owner_name()} to respond"}
 
     # Send the message
     result = asyncio.run(_send_telegram_message(text))
 
     if result["success"]:
-        # Update state based on current conversation state
         if current_state == "WAITING":
-            mark_initiation_sent()
             logger.info(f"{config.agent_name()} sent initiation message: {text[:50]}...")
         elif current_state == "IN_CONVERSATION":
             mark_agent_message_in_conversation()
             logger.info(f"{config.agent_name()} sent message in conversation: {text[:50]}...")
+    elif current_state == "WAITING":
+        # Release the reserved slot if delivery failed.
+        with _exclusive_lock(state_file):
+            state = _load_state_unlocked(state_file)
+            if state.get("state") == "WAITING_FOR_RESPONSE":
+                state["state"] = "WAITING"
+                state["initiation_sent_at"] = None
+                state["last_activity"] = None
+                _atomic_write_text(state_file, json.dumps(state, indent=2))
+                os.chmod(state_file, 0o600)
 
     return result

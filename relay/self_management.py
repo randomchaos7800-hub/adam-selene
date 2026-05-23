@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from relay import config
+from relay.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -341,14 +342,24 @@ def store_credential(service: str, data: dict) -> dict:
             except Exception:
                 pass
 
-        existing.update(data)
-        cred_file.write_text(json.dumps(existing, indent=2))
-        cred_file.chmod(0o600)
-
         # Also store each key in vault
+        vault_failures = []
         for k, v in data.items():
             vault_key = f"{service}_{k}"
-            vault_set(vault_key, str(v))
+            result = vault_set(vault_key, str(v))
+            if not result.get("success"):
+                vault_failures.append(f"{vault_key}: {result.get('error', 'unknown error')}")
+
+        if vault_failures:
+            return {
+                "success": False,
+                "error": "Vault persistence failed",
+                "details": vault_failures,
+            }
+
+        existing.update(data)
+        atomic_write_text(cred_file, json.dumps(existing, indent=2))
+        cred_file.chmod(0o600)
 
         logger.info(f"Stored credentials for {service}")
         return {
