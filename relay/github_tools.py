@@ -20,15 +20,11 @@ import requests
 from relay import config
 
 logger = logging.getLogger(__name__)
+GITHUB_API_TIMEOUT = 20.0
 
 # ---------------------------------------------------------------------------
-# Credentials — read at import time (dotenv must be loaded before import)
+# Credentials / token cache
 # ---------------------------------------------------------------------------
-
-GITHUB_USERNAME = os.environ.get("GITHUB_USERNAME", "")
-_APP_ID = os.environ.get("GITHUB_APP_ID", "")
-_APP_KEY_B64 = os.environ.get("GITHUB_APP_PRIVATE_KEY_B64", "")
-_PAT_FALLBACK = os.environ.get("GITHUB_TOKEN", "")
 
 _USER_AGENT = f"{config.agent_name()}-Agent"
 
@@ -38,24 +34,47 @@ _USER_AGENT = f"{config.agent_name()}-Agent"
 
 _cached_token: str = ""
 _token_expires_at: float = 0.0
+_cached_token_source: tuple[str, str] | None = None
 _TOKEN_REFRESH_BUFFER = 120  # seconds before expiry to refresh
+
+
+def _credential_env() -> dict[str, str]:
+    """Read GitHub credentials at call time so late-loaded env changes take effect."""
+    return {
+        "username": os.environ.get("GITHUB_USERNAME", "").strip(),
+        "app_id": os.environ.get("GITHUB_APP_ID", "").strip(),
+        "app_key_b64": os.environ.get("GITHUB_APP_PRIVATE_KEY_B64", "").strip(),
+        "pat": os.environ.get("GITHUB_TOKEN", "").strip(),
+    }
+
+
+def _request(method: str, url: str, **kwargs) -> requests.Response:
+    kwargs.setdefault("timeout", GITHUB_API_TIMEOUT)
+    return requests.request(method, url, **kwargs)
 
 
 def _get_token() -> str:
     """Return a valid GitHub token. Uses cache; mints new App token when needed."""
-    global _cached_token, _token_expires_at
+    global _cached_token, _token_expires_at, _cached_token_source
+    creds = _credential_env()
+    source = (creds["app_id"], creds["pat"])
+
+    if _cached_token_source != source:
+        _cached_token = ""
+        _token_expires_at = 0.0
+        _cached_token_source = source
 
     if _cached_token and time.time() < _token_expires_at - _TOKEN_REFRESH_BUFFER:
         return _cached_token
 
-    if _APP_ID and _APP_KEY_B64:
-        token, expires_at = _mint_installation_token(_APP_ID, _APP_KEY_B64)
+    if creds["app_id"] and creds["app_key_b64"]:
+        token, expires_at = _mint_installation_token(creds["app_id"], creds["app_key_b64"])
         _cached_token = token
         _token_expires_at = expires_at
         return _cached_token
 
-    if _PAT_FALLBACK:
-        _cached_token = _PAT_FALLBACK
+    if creds["pat"]:
+        _cached_token = creds["pat"]
         _token_expires_at = float("inf")
         return _cached_token
 
@@ -81,13 +100,14 @@ def _mint_installation_token(app_id: str, key_b64: str) -> tuple[str, float]:
         "User-Agent": _USER_AGENT,
     }
 
-    inst_resp = requests.get("https://api.github.com/app/installations", headers=headers)
+    inst_resp = _request("GET", "https://api.github.com/app/installations", headers=headers)
     inst_resp.raise_for_status()
     installations = inst_resp.json()
     if not installations:
         raise RuntimeError("GitHub App has no installations")
 
-    token_resp = requests.post(
+    token_resp = _request(
+        "POST",
         f"https://api.github.com/app/installations/{installations[0]['id']}/access_tokens",
         headers=headers,
     )
@@ -117,7 +137,10 @@ def _full_name(repo_name: str) -> str:
     """Return 'owner/repo' — auto-prepend username if not already qualified."""
     if "/" in repo_name:
         return repo_name
-    return f"{GITHUB_USERNAME}/{repo_name}"
+    username = _credential_env()["username"]
+    if not username:
+        raise RuntimeError("GITHUB_USERNAME is required when repo_name is not owner/repo")
+    return f"{username}/{repo_name}"
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +181,7 @@ def create_repo(repo_name: str, description: str = "", private: bool = True) -> 
         "gitignore_template": "Python",
     }
     try:
-        resp = requests.post("https://api.github.com/user/repos", headers=_headers(), json=data)
+        resp = _request("POST", "https://api.github.com/user/repos", headers=_headers(), json=data)
         if resp.status_code == 201:
             repo_data = resp.json()
             return {
@@ -188,7 +211,7 @@ def push_file(
     file_url = f"https://api.github.com/repos/{full}/contents/{file_path}"
 
     try:
-        existing = requests.get(file_url, headers=_headers())
+        existing = _request("GET", file_url, headers=_headers())
         sha: Optional[str] = None
         if existing.status_code == 200:
             sha = existing.json().get("sha")
@@ -197,7 +220,7 @@ def push_file(
         if sha:
             payload["sha"] = sha
 
-        resp = requests.put(file_url, headers=_headers(), json=payload)
+        resp = _request("PUT", file_url, headers=_headers(), json=payload)
         if resp.status_code in [200, 201]:
             result = resp.json()
             action = "updated" if sha else "created"
@@ -217,7 +240,7 @@ def get_repo_info(repo_name: str) -> Dict[str, Any]:
     """Get information about a repository."""
     full = _full_name(repo_name)
     try:
-        resp = requests.get(f"https://api.github.com/repos/{full}", headers=_headers())
+        resp = _request("GET", f"https://api.github.com/repos/{full}", headers=_headers())
         if resp.status_code == 200:
             d = resp.json()
             return {
@@ -248,8 +271,10 @@ def list_repos() -> Dict[str, Any]:
     """List all repositories accessible with current credentials."""
     try:
         # Installation token → use installation-scoped endpoint
-        if _APP_ID and _APP_KEY_B64:
-            resp = requests.get(
+        creds = _credential_env()
+        if creds["app_id"] and creds["app_key_b64"]:
+            resp = _request(
+                "GET",
                 "https://api.github.com/installation/repositories?per_page=50",
                 headers=_headers(),
             )
@@ -258,7 +283,8 @@ def list_repos() -> Dict[str, Any]:
             repos = resp.json().get("repositories", [])
         else:
             # PAT fallback
-            resp = requests.get(
+            resp = _request(
+                "GET",
                 "https://api.github.com/user/repos",
                 headers=_headers(),
                 params={"sort": "updated", "per_page": 50},
@@ -295,7 +321,8 @@ def create_branch(
     """Create a new branch in the repository."""
     full = _full_name(repo_name)
     try:
-        ref_resp = requests.get(
+        ref_resp = _request(
+            "GET",
             f"https://api.github.com/repos/{full}/git/ref/heads/{from_branch}",
             headers=_headers(),
         )
@@ -304,7 +331,8 @@ def create_branch(
 
         source_sha = ref_resp.json()["object"]["sha"]
         data = {"ref": f"refs/heads/{branch_name}", "sha": source_sha}
-        resp = requests.post(
+        resp = _request(
+            "POST",
             f"https://api.github.com/repos/{full}/git/refs",
             headers=_headers(),
             json=data,
@@ -327,7 +355,8 @@ def get_file_content(
     """Get the content of a file from a GitHub repository."""
     full = _full_name(repo_name)
     try:
-        resp = requests.get(
+        resp = _request(
+            "GET",
             f"https://api.github.com/repos/{full}/contents/{file_path}",
             headers=_headers(),
             params={"ref": branch},

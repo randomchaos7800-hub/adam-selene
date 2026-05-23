@@ -12,9 +12,12 @@ Use replay_session.py to reconstruct any session as a readable trace.
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 import uuid
+import fcntl
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +32,32 @@ def _sessions_dir() -> Path:
 
 def _index_file() -> Path:
     return _sessions_dir() / "index.json"
+
+
+def _lock_file_for(path: Path) -> Path:
+    return path.parent / f".{path.name}.lock"
+
+
+@contextmanager
+def _exclusive_lock(path: Path):
+    lock_file = _lock_file_for(path)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_file, "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, encoding="utf-8") as tmp:
+        tmp.write(content)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
 
 _local = threading.local()  # thread-local current session
 
@@ -201,8 +230,10 @@ def _write(session_id: str, started_at: str, data: dict) -> None:
     filepath = _session_file(session_id, started_at)
     line = json.dumps({"ts": _now_iso(), "session_id": session_id, **data})
     try:
-        with open(filepath, "a") as f:
-            f.write(line + "\n")
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        with _exclusive_lock(filepath):
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
     except Exception as e:
         logger.debug(f"session_log write failed: {e}")
 
@@ -213,34 +244,35 @@ def _write_audit(data: dict) -> None:
     sessions_dir.mkdir(parents=True, exist_ok=True)
     line = json.dumps({"ts": _now_iso(), **data})
     try:
-        with open(audit_file, "a") as f:
-            f.write(line + "\n")
+        with _exclusive_lock(audit_file):
+            with open(audit_file, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
     except Exception:
         pass
 
 
 def _index_upsert(session_id: str, started_at: str, user_id: str = "", interface: str = "", status: str = "active") -> None:
     try:
-        index = {}
         index_file = _index_file()
-        if index_file.exists():
-            index = json.loads(index_file.read_text())
-        entry = index.get(session_id, {
-            "session_id": session_id,
-            "started_at": started_at,
-            "user_id": user_id,
-            "interface": interface,
-            "status": "active",
-        })
-        entry["status"] = status
-        if status == "ended":
-            entry["ended_at"] = _now_iso()
-        index[session_id] = entry
-        # Keep last 200 sessions
-        if len(index) > 200:
-            oldest = sorted(index.values(), key=lambda x: x["started_at"])[:len(index) - 200]
-            for e in oldest:
-                index.pop(e["session_id"], None)
-        index_file.write_text(json.dumps(index, indent=2))
+        with _exclusive_lock(index_file):
+            index = {}
+            if index_file.exists():
+                index = json.loads(index_file.read_text(encoding="utf-8"))
+            entry = index.get(session_id, {
+                "session_id": session_id,
+                "started_at": started_at,
+                "user_id": user_id,
+                "interface": interface,
+                "status": "active",
+            })
+            entry["status"] = status
+            if status == "ended":
+                entry["ended_at"] = _now_iso()
+            index[session_id] = entry
+            if len(index) > 200:
+                oldest = sorted(index.values(), key=lambda x: x["started_at"])[:len(index) - 200]
+                for e in oldest:
+                    index.pop(e["session_id"], None)
+            _atomic_write_text(index_file, json.dumps(index, indent=2))
     except Exception as e:
         logger.debug(f"session index update failed: {e}")
