@@ -590,14 +590,13 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "set_default_model",
-        "description": "Change your default AI model. Options: 'haiku' (fast/cheap), 'sonnet' (balanced), 'opus' (powerful/expensive). Requires restart to take effect.",
+        "description": "Change your primary AI model. Accepts common aliases like 'haiku', 'sonnet', 'opus', or a full provider/model ID. Requires restart to take effect.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "model_name": {
                     "type": "string",
-                    "description": "Model to use",
-                    "enum": ["haiku", "sonnet", "opus"]
+                    "description": "Model alias or full model ID"
                 }
             },
             "required": ["model_name"]
@@ -605,14 +604,14 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "update_config_setting",
-        "description": "Update a specific configuration setting. Allowed settings: default_model, extraction_timeout, heartbeat_idle_minutes, verbose_logging.",
+        "description": "Update a specific configuration setting. Allowed settings: models.main, models.extraction, heartbeat.idle_minutes, heartbeat.enabled, heartbeat.model_override, extraction.idle_timeout_seconds, extraction.incremental_every_n_messages, context.max_output_tokens, local.base_url, local.model, openrouter.model, openrouter.fallback_model, openrouter.heartbeat_model, autoresearch.base_url, service_name.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "key": {
                     "type": "string",
                     "description": "Config key to update",
-                    "enum": ["default_model", "extraction_timeout", "heartbeat_idle_minutes", "verbose_logging"]
+                    "enum": ["models.main", "models.extraction", "heartbeat.idle_minutes", "heartbeat.enabled", "heartbeat.model_override", "extraction.idle_timeout_seconds", "extraction.incremental_every_n_messages", "context.max_output_tokens", "local.base_url", "local.model", "openrouter.model", "openrouter.fallback_model", "openrouter.heartbeat_model", "autoresearch.base_url", "service_name"]
                 },
                 "value": {
                     "description": "New value for the setting"
@@ -623,7 +622,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "restart_agent_service",
-        "description": "Restart your main service to apply configuration changes. Use this after changing settings like default_model.",
+        "description": "Restart your main service to apply configuration changes. Use this after changing model or runtime settings.",
         "input_schema": {
             "type": "object",
             "properties": {},

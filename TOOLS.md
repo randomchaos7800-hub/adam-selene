@@ -197,11 +197,11 @@ Create a backup of the agent's code and memory.
 ### `read_my_config()`
 Read the current settings.json.
 
-### `set_default_model(model)`
-Change the default inference model.
+### `set_default_model(model_name)`
+Change the primary inference model. Accepts common aliases like `haiku`, `sonnet`, `opus`, or a full provider/model ID.
 
 ### `update_config_setting(key, value)`
-Update a setting in settings.json.
+Update a setting in `settings.json`. Supported keys: `models.main`, `models.extraction`, `heartbeat.idle_minutes`, `heartbeat.enabled`, `heartbeat.model_override`, `extraction.idle_timeout_seconds`, `extraction.incremental_every_n_messages`, `context.max_output_tokens`, `local.base_url`, `local.model`, `openrouter.model`, `openrouter.fallback_model`, `openrouter.heartbeat_model`, `autoresearch.base_url`, `service_name`.
 
 ### `restart_agent_service()`
 Restart the agent's systemd service.

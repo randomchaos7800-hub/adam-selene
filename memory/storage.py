@@ -20,12 +20,18 @@ Memory structure:
 
 import json
 import logging
+import os
+import tempfile
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, TypeVar
+
+import fcntl
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 def _get_memory_root() -> Path:
@@ -37,12 +43,65 @@ def _get_memory_root() -> Path:
     return Path.home() / "adam-selene-memory"
 
 
-MEMORY_ROOT = _get_memory_root()
-
-
 def get_memory_path() -> Path:
     """Get the memory root path."""
-    return MEMORY_ROOT
+    return _get_memory_root()
+
+
+def _normalize_entities(data: object) -> dict:
+    """Accept both the current flat schema and the legacy nested schema."""
+    if isinstance(data, dict):
+        nested = data.get("entities")
+        if isinstance(nested, dict):
+            return nested
+        return data
+    return {}
+
+
+def _lock_file_for(path: Path) -> Path:
+    return path.parent / f".{path.name}.lock"
+
+
+@contextmanager
+def _exclusive_lock(path: Path):
+    lock_file = _lock_file_for(path)
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_file, "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False, encoding="utf-8") as tmp:
+        tmp.write(content)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, path)
+
+
+def _write_text_locked(path: Path, content: str) -> None:
+    with _exclusive_lock(path):
+        _atomic_write_text(path, content)
+
+
+def _read_json(path: Path, default):
+    if not path.exists():
+        return default
+    return json.loads(path.read_text())
+
+
+def update_json_file(path: Path, default, updater: Callable[[dict | list], T]) -> T:
+    """Update a JSON file under an exclusive lock and atomically replace it."""
+    with _exclusive_lock(path):
+        data = _read_json(path, default)
+        result = updater(data)
+        _atomic_write_text(path, json.dumps(data, indent=2))
+        return result
 
 
 def init_memory() -> None:
@@ -65,15 +124,18 @@ def init_memory() -> None:
 
     entities_file = root / "entities.json"
     if not entities_file.exists():
-        entities_file.write_text(json.dumps({}, indent=2))
+        _write_text_locked(entities_file, json.dumps({}, indent=2))
+    else:
+        normalized = _normalize_entities(json.loads(entities_file.read_text()))
+        _write_text_locked(entities_file, json.dumps(normalized, indent=2))
 
     memory_file = root / "MEMORY.md"
     if not memory_file.exists():
-        memory_file.write_text("# How Your Owner Thinks\n\n(Not yet populated)\n")
+        _write_text_locked(memory_file, "# How Your Owner Thinks\n\n(Not yet populated)\n")
 
     experiments_file = root / "experiments" / "learning_log.json"
     if not experiments_file.exists():
-        experiments_file.write_text(json.dumps([], indent=2))
+        _write_text_locked(experiments_file, json.dumps([], indent=2))
 
     logger.info(f"Memory initialized at {root}")
 
@@ -125,13 +187,13 @@ def load_entities() -> dict:
     entities_file = get_memory_path() / "entities.json"
     if not entities_file.exists():
         return {}
-    return json.loads(entities_file.read_text())
+    return _normalize_entities(json.loads(entities_file.read_text()))
 
 
 def save_entities(entities: dict) -> None:
     """Save the master entity list."""
     entities_file = get_memory_path() / "entities.json"
-    entities_file.write_text(json.dumps(entities, indent=2))
+    _write_text_locked(entities_file, json.dumps(entities, indent=2))
 
 
 def add_entity(name: str, category: str, aliases: Optional[list[str]] = None) -> None:
@@ -147,14 +209,14 @@ def add_entity(name: str, category: str, aliases: Optional[list[str]] = None) ->
     entity_dir.mkdir(parents=True, exist_ok=True)
 
     facts_file = entity_dir / "facts.json"
-    facts_file.write_text(json.dumps({
+    _write_text_locked(facts_file, json.dumps({
         "entity": name,
         "category": category,
         "facts": []
     }, indent=2))
 
     summary_file = entity_dir / "summary.md"
-    summary_file.write_text(f"# {name.replace('_', ' ').title()}\n\n(No summary yet)\n")
+    _write_text_locked(summary_file, f"# {name.replace('_', ' ').title()}\n\n(No summary yet)\n")
 
     entities[name] = {
         "category": category,
@@ -242,8 +304,6 @@ def add_fact(
 
     entity_data = entities[name_lower]
     facts_file = get_memory_path() / entity_data["path"] / "facts.json"
-    facts_data = json.loads(facts_file.read_text())
-
     fact_id = f"fact-{uuid.uuid4().hex[:8]}"
     now = datetime.now().isoformat()
 
@@ -262,8 +322,17 @@ def add_fact(
         "extracted": now,
         "active": True,
     }
-    facts_data["facts"].append(new_fact)
-    facts_file.write_text(json.dumps(facts_data, indent=2))
+    def _append_fact(data: dict) -> None:
+        data.setdefault("entity", name_lower)
+        data.setdefault("category", entity_data["category"])
+        data.setdefault("facts", [])
+        data["facts"].append(new_fact)
+
+    update_json_file(
+        facts_file,
+        {"entity": name_lower, "category": entity_data["category"], "facts": []},
+        _append_fact,
+    )
 
     logger.info(f"Added fact {fact_id} to {name_lower}: {content[:50]}...")
     return fact_id
@@ -283,17 +352,16 @@ def supersede_fact(entity_name: str, old_fact_id: str, new_fact_id: str) -> bool
     if not facts_file.exists():
         return False
 
-    facts_data = json.loads(facts_file.read_text())
+    def _supersede(data: dict) -> bool:
+        for fact in data.get("facts", []):
+            if fact.get("id") == old_fact_id:
+                fact["status"] = "superseded"
+                fact["active"] = False
+                fact["supersededBy"] = new_fact_id
+                return True
+        return False
 
-    for fact in facts_data.get("facts", []):
-        if fact.get("id") == old_fact_id:
-            fact["status"] = "superseded"
-            fact["active"] = False
-            fact["supersededBy"] = new_fact_id
-            facts_file.write_text(json.dumps(facts_data, indent=2))
-            return True
-
-    return False
+    return update_json_file(facts_file, {"facts": []}, _supersede)
 
 
 def search_facts(query: str) -> list[dict]:
@@ -315,7 +383,14 @@ def search_facts(query: str) -> list[dict]:
                 continue
             text = fact.get("fact", fact.get("content", ""))
             if query_lower in text.lower():
-                results.append({"entity": entity_name, "fact": fact})
+                score = text.lower().count(query_lower)
+                if query_lower in entity_name.lower():
+                    score += 1
+                results.append({
+                    "entity": entity_name,
+                    "fact": fact,
+                    "relevance_score": score,
+                })
 
     return results
 
@@ -349,16 +424,15 @@ def deactivate_fact(entity_name: str, fact_id: str) -> bool:
     if not facts_file.exists():
         return False
 
-    facts_data = json.loads(facts_file.read_text())
+    def _deactivate(data: dict) -> bool:
+        for fact in data.get("facts", []):
+            if fact.get("id") == fact_id:
+                fact["active"] = False
+                fact["status"] = "superseded"
+                return True
+        return False
 
-    for fact in facts_data.get("facts", []):
-        if fact.get("id") == fact_id:
-            fact["active"] = False
-            fact["status"] = "superseded"
-            facts_file.write_text(json.dumps(facts_data, indent=2))
-            return True
-
-    return False
+    return update_json_file(facts_file, {"facts": []}, _deactivate)
 
 
 # --- Timeline ---
@@ -377,13 +451,13 @@ def append_timeline(date: str, entry: str) -> None:
     notes_dir.mkdir(parents=True, exist_ok=True)
     notes_file = notes_dir / f"{date}.md"
 
-    if notes_file.exists():
-        content = notes_file.read_text()
-        content += f"\n{entry}\n"
-    else:
-        content = f"# {date}\n\n{entry}\n"
-
-    notes_file.write_text(content)
+    with _exclusive_lock(notes_file):
+        if notes_file.exists():
+            content = notes_file.read_text()
+            content += f"\n{entry}\n"
+        else:
+            content = f"# {date}\n\n{entry}\n"
+        _atomic_write_text(notes_file, content)
 
 
 # --- Tacit knowledge ---
@@ -399,7 +473,7 @@ def read_tacit() -> str:
 def write_tacit(content: str) -> None:
     """Write tacit knowledge (MEMORY.md)."""
     memory_file = get_memory_path() / "MEMORY.md"
-    memory_file.write_text(content)
+    _write_text_locked(memory_file, content)
 
 
 # --- Prompt versioning ---
@@ -430,22 +504,20 @@ def save_system_prompt(new_prompt: str) -> int:
     """Save a new version of the system prompt. Returns new version number."""
     prompts_dir = get_memory_path() / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
+    version_file = prompts_dir / ".prompt-version.lock"
+    with _exclusive_lock(version_file):
+        version = get_prompt_version() + 1
+        prompt_file = prompts_dir / f"v{version}.md"
+        _atomic_write_text(prompt_file, new_prompt)
 
-    version = get_prompt_version() + 1
-    prompt_file = prompts_dir / f"v{version}.md"
-    prompt_file.write_text(new_prompt)
-
-    log_file = prompts_dir / "changelog.json"
-    changelog = []
-    if log_file.exists():
-        changelog = json.loads(log_file.read_text())
-
-    changelog.append({
-        "version": version,
-        "timestamp": datetime.now().isoformat(),
-        "file": f"v{version}.md",
-    })
-    log_file.write_text(json.dumps(changelog, indent=2))
+        log_file = prompts_dir / "changelog.json"
+        changelog = _read_json(log_file, [])
+        changelog.append({
+            "version": version,
+            "timestamp": datetime.now().isoformat(),
+            "file": f"v{version}.md",
+        })
+        _atomic_write_text(log_file, json.dumps(changelog, indent=2))
 
     logger.info(f"Saved system prompt v{version}")
     return version
@@ -477,36 +549,34 @@ def load_experiments() -> list[dict]:
 
 def log_experiment(hypothesis: str, result: str, status: str = "testing") -> None:
     """Log an experiment to the learning log."""
-    experiments = load_experiments()
-    experiments.append({
-        "id": f"exp-{uuid.uuid4().hex[:8]}",
-        "timestamp": datetime.now().isoformat(),
-        "hypothesis": hypothesis,
-        "result": result,
-        "status": status,
-    })
-
     log_file = get_memory_path() / "experiments" / "learning_log.json"
     log_file.parent.mkdir(parents=True, exist_ok=True)
-    log_file.write_text(json.dumps(experiments, indent=2))
+    def _append(data: list) -> None:
+        data.append({
+            "id": f"exp-{uuid.uuid4().hex[:8]}",
+            "timestamp": datetime.now().isoformat(),
+            "hypothesis": hypothesis,
+            "result": result,
+            "status": status,
+        })
+    update_json_file(log_file, [], _append)
 
 
 def update_experiment_status(experiment_id: str, new_status: str, result: str = "") -> bool:
     """Update an experiment's status."""
-    experiments = load_experiments()
+    log_file = get_memory_path() / "experiments" / "learning_log.json"
 
-    for exp in experiments:
-        if exp.get("id") == experiment_id:
-            exp["status"] = new_status
-            if result:
-                exp["result"] = result
-            exp["updated"] = datetime.now().isoformat()
+    def _update(data: list) -> bool:
+        for exp in data:
+            if exp.get("id") == experiment_id:
+                exp["status"] = new_status
+                if result:
+                    exp["result"] = result
+                exp["updated"] = datetime.now().isoformat()
+                return True
+        return False
 
-            log_file = get_memory_path() / "experiments" / "learning_log.json"
-            log_file.write_text(json.dumps(experiments, indent=2))
-            return True
-
-    return False
+    return update_json_file(log_file, [], _update)
 
 
 # --- Tasks ---
@@ -534,7 +604,7 @@ def add_task(task: str) -> None:
         else:
             content = content.replace("## Active\n", f"## Active\n\n- {task}\n")
 
-    tasks_file.write_text(content)
+    _write_text_locked(tasks_file, content)
 
 
 def complete_task(task: str) -> bool:
@@ -543,21 +613,22 @@ def complete_task(task: str) -> bool:
     if not tasks_file.exists():
         return False
 
-    content = tasks_file.read_text()
-    task_line = f"- {task}\n"
-    if task_line not in content:
-        return False
+    with _exclusive_lock(tasks_file):
+        content = tasks_file.read_text()
+        task_line = f"- {task}\n"
+        if task_line not in content:
+            return False
 
-    content = content.replace(task_line, "", 1)
-    if "(none yet)" in content:
-        content = content.replace("## Completed\n\n(none yet)", f"## Completed\n\n- {task}")
-    elif "## Completed\n\n" in content:
-        content = content.replace("## Completed\n\n", f"## Completed\n\n- {task}\n")
-    else:
-        content = content.replace("## Completed\n", f"## Completed\n\n- {task}\n")
+        content = content.replace(task_line, "", 1)
+        if "(none yet)" in content:
+            content = content.replace("## Completed\n\n(none yet)", f"## Completed\n\n- {task}")
+        elif "## Completed\n\n" in content:
+            content = content.replace("## Completed\n\n", f"## Completed\n\n- {task}\n")
+        else:
+            content = content.replace("## Completed\n", f"## Completed\n\n- {task}\n")
 
-    tasks_file.write_text(content)
-    return True
+        _atomic_write_text(tasks_file, content)
+        return True
 
 
 if __name__ == "__main__":

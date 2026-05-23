@@ -210,12 +210,18 @@ class Heartbeat:
 
             # Apply deactivations in-place
             if to_deactivate:
-                for fact in facts_data["facts"]:
-                    if fact.get("id") in to_deactivate:
-                        fact["status"] = "superseded"
-                        fact["active"] = False
-                        fact["supersededBy"] = "compaction"
-                facts_file.write_text(json.dumps(facts_data, indent=2))
+                def _apply_compaction(data: dict) -> None:
+                    for fact in data.get("facts", []):
+                        if fact.get("id") in to_deactivate:
+                            fact["status"] = "superseded"
+                            fact["active"] = False
+                            fact["supersededBy"] = "compaction"
+
+                storage.update_json_file(
+                    facts_file,
+                    {"entity": entity_name, "category": entity_data["category"], "facts": []},
+                    _apply_compaction,
+                )
                 stats["removed"] += len(to_deactivate)
 
         # Write compaction log
@@ -593,10 +599,12 @@ Return ONLY this JSON:
     async def _run_autoresearch(self, topic: str) -> dict | None:
         """Call the autoresearch API."""
         import httpx
+        settings = config.load_settings()
+        base_url = settings.get("autoresearch", {}).get("base_url", "http://127.0.0.1:8001").rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
-                    "http://127.0.0.1:8001/search",
+                    f"{base_url}/search",
                     json={
                         "query": topic,
                         "sources": ["web", "x", "memory"],

@@ -22,8 +22,13 @@ from relay import config
 
 logger = logging.getLogger(__name__)
 
-SESSIONS_DIR = config.memory_root() / "sessions"
-INDEX_FILE = SESSIONS_DIR / "index.json"
+
+def _sessions_dir() -> Path:
+    return config.memory_root() / "sessions"
+
+
+def _index_file() -> Path:
+    return _sessions_dir() / "index.json"
 
 _local = threading.local()  # thread-local current session
 
@@ -34,7 +39,7 @@ def _now_iso() -> str:
 
 def _session_file(session_id: str, started_at: str) -> Path:
     date = started_at[:10]
-    return SESSIONS_DIR / f"{date}_{session_id}.jsonl"
+    return _sessions_dir() / f"{date}_{session_id}.jsonl"
 
 
 # --- Session lifecycle ---
@@ -45,7 +50,7 @@ def start_session(user_id: str = None, interface: str = "unknown") -> str:
         user_id = config.owner_user_id()
     session_id = str(uuid.uuid4())[:12]
     started_at = _now_iso()
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    _sessions_dir().mkdir(parents=True, exist_ok=True)
 
     _local.session_id = session_id
     _local.started_at = started_at
@@ -203,8 +208,9 @@ def _write(session_id: str, started_at: str, data: dict) -> None:
 
 
 def _write_audit(data: dict) -> None:
-    audit_file = SESSIONS_DIR / "shell_audit.jsonl"
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    sessions_dir = _sessions_dir()
+    audit_file = sessions_dir / "shell_audit.jsonl"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
     line = json.dumps({"ts": _now_iso(), **data})
     try:
         with open(audit_file, "a") as f:
@@ -216,8 +222,9 @@ def _write_audit(data: dict) -> None:
 def _index_upsert(session_id: str, started_at: str, user_id: str = "", interface: str = "", status: str = "active") -> None:
     try:
         index = {}
-        if INDEX_FILE.exists():
-            index = json.loads(INDEX_FILE.read_text())
+        index_file = _index_file()
+        if index_file.exists():
+            index = json.loads(index_file.read_text())
         entry = index.get(session_id, {
             "session_id": session_id,
             "started_at": started_at,
@@ -234,6 +241,6 @@ def _index_upsert(session_id: str, started_at: str, user_id: str = "", interface
             oldest = sorted(index.values(), key=lambda x: x["started_at"])[:len(index) - 200]
             for e in oldest:
                 index.pop(e["session_id"], None)
-        INDEX_FILE.write_text(json.dumps(index, indent=2))
+        index_file.write_text(json.dumps(index, indent=2))
     except Exception as e:
         logger.debug(f"session index update failed: {e}")

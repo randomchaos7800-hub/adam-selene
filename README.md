@@ -37,7 +37,7 @@ python -m interfaces.slack_interface
 python -m interfaces.irc_client
 ```
 
-The setup wizard asks for your agent's name, personality, values, and API keys — then generates all config files automatically.
+The setup wizard asks for your agent's name, personality, values, and API keys — then generates all config files automatically. Secrets are written to `config/secrets.env`.
 
 ## Requirements
 
@@ -128,6 +128,8 @@ All behavior is driven by `config/settings.json`:
 | `extraction.incremental_every_n_messages` | Extract facts every N messages |
 | `synthesis.day_of_week` | Weekly summary rewrite day |
 | `synthesis.archive_after_days` | Archive old facts after N days |
+| `local.base_url` | Local OpenAI-compatible inference endpoint |
+| `autoresearch.base_url` | Autoresearch API endpoint used by heartbeat |
 
 ## Tools
 
@@ -184,8 +186,6 @@ Set up cron for memory maintenance:
 ## Known Limitations
 
 **Vault secrets in public channels.** ~~The vault tools (`vault_get`, `vault_set`) return plaintext secrets.~~ **Partially fixed:** `vault_get` and `read_credential` now return masked values (e.g., `sk-a...xxxx`) instead of raw secrets. `vault_set` passes secrets via stdin (not CLI args) to prevent `/proc/cmdline` exposure. Session logs redact sensitive tool inputs. Shell blocklist hardened against base64/eval/command-substitution bypasses. The tool dispatcher now enforces owner identity checks on all privileged tools (vault, credentials, shell, self-modification, git). Non-owner users receive "Permission denied" and the attempt is logged with user_id and interface.
-
-**File locking on concurrent writes.** The architecture is designed so only one brain writes at a time (day brain or night brain). However, the extraction pipeline runs as a background daemon thread during conversation, meaning the relay and extraction could theoretically write to the same `facts.json` simultaneously. In practice this hasn't caused corruption because writes are small and infrequent, but a proper `fcntl` lock on write operations would close the gap.
 
 **Stale working memory threshold.** Working memory auto-abandons threads after 2 hours without a heartbeat. If your heartbeat interval is set high (e.g., 45 minutes), that's only ~2.5 cycles — potentially too aggressive. The threshold should be configurable or derived from the heartbeat interval.
 

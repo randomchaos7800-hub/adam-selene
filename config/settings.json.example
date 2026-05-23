@@ -71,5 +71,9 @@
         "model": "google/gemma-4-31b-it",
         "fallback_model": "google/gemma-4-26b-a4b-it",
         "heartbeat_model": "google/gemini-2.0-flash-001"
+    },
+
+    "autoresearch": {
+        "base_url": "http://127.0.0.1:8001"
     }
 }

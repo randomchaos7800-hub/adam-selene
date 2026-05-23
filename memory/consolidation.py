@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
+from memory import storage
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,20 @@ def _get_lighthouse_root() -> Path:
     return Path(__file__).parent.parent / "LIGHTHOUSE"
 
 
-MEMORY_ROOT = _get_memory_root()
-CONSOLIDATION_DIR = MEMORY_ROOT / "consolidation"
-LIGHTHOUSE_ROOT = _get_lighthouse_root()
-SESSIONS_DB = MEMORY_ROOT / "sessions.db"
+def _memory_root() -> Path:
+    return _get_memory_root()
+
+
+def _consolidation_dir() -> Path:
+    return _memory_root() / "consolidation"
+
+
+def _lighthouse_root() -> Path:
+    return _get_lighthouse_root()
+
+
+def _sessions_db() -> Path:
+    return _memory_root() / "sessions.db"
 
 # Decay rate per category -- how fast relevance fades day-over-day.
 # Higher = faster decay. Milestones and relationships are durable; status is transient.
@@ -104,17 +115,17 @@ def _make_client() -> tuple[OpenAI, str]:
 
 
 def _load_entities() -> dict:
-    entities_file = MEMORY_ROOT / "entities.json"
+    entities_file = _memory_root() / "entities.json"
     if not entities_file.exists():
         return {}
-    return json.loads(entities_file.read_text())
+    return storage.load_entities()
 
 
 def _load_facts(entity_name: str, entities: dict) -> Optional[tuple[Path, dict]]:
     """Return (facts_file_path, facts_data) or None if missing."""
     if entity_name not in entities:
         return None
-    facts_file = MEMORY_ROOT / entities[entity_name]["path"] / "facts.json"
+    facts_file = _memory_root() / entities[entity_name]["path"] / "facts.json"
     if not facts_file.exists():
         return None
     return facts_file, json.loads(facts_file.read_text())
@@ -196,7 +207,7 @@ class ConsolidationPass:
 
         # Source 1: New/updated LTM facts
         for entity_name, entity_data in self.entities.items():
-            facts_file = MEMORY_ROOT / entity_data["path"] / "facts.json"
+            facts_file = _memory_root() / entity_data["path"] / "facts.json"
             if not facts_file.exists():
                 continue
             facts_data = json.loads(facts_file.read_text())
@@ -213,11 +224,12 @@ class ConsolidationPass:
                     pass
 
         # Source 2: LIGHTHOUSE entries written in last 24h
-        if LIGHTHOUSE_ROOT.exists():
+        lighthouse_root = _lighthouse_root()
+        if lighthouse_root.exists():
             entity_names_lower = {
                 e: e.replace("_", " ") for e in self.entities
             }
-            for section_dir in LIGHTHOUSE_ROOT.iterdir():
+            for section_dir in lighthouse_root.iterdir():
                 if not section_dir.is_dir():
                     continue
                 for entry_file in section_dir.glob("*.md"):
@@ -233,7 +245,7 @@ class ConsolidationPass:
                         pass
 
         # Source 3: Archived WM threads (check goal/title text for entity mentions)
-        wm_file = MEMORY_ROOT / "working_memory.json"
+        wm_file = _memory_root() / "working_memory.json"
         if wm_file.exists():
             try:
                 wm_data = json.loads(wm_file.read_text())
@@ -258,11 +270,12 @@ class ConsolidationPass:
     def _get_recent_entities(self, days: int) -> set[str]:
         """Entity names mentioned in conversations in the last N days."""
         recent: set[str] = set()
-        if not SESSIONS_DB.exists():
+        sessions_db = _sessions_db()
+        if not sessions_db.exists():
             return recent
         try:
             since = (self.now - timedelta(days=days)).isoformat()
-            conn = sqlite3.connect(str(SESSIONS_DB))
+            conn = sqlite3.connect(str(sessions_db))
             rows = conn.execute(
                 "SELECT content FROM messages WHERE timestamp > ?",
                 (since,)
@@ -332,7 +345,11 @@ class ConsolidationPass:
                     )
 
             if modified:
-                facts_file.write_text(json.dumps(facts_data, indent=2))
+                storage.update_json_file(
+                    facts_file,
+                    {"entity": entity_name, "category": entity_data["category"], "facts": []},
+                    lambda data, facts_data=facts_data: data.update(facts_data),
+                )
 
         self.report["facts_scored"] = total_scored
         self.report["facts_archived"] = total_archived
@@ -373,7 +390,8 @@ class ConsolidationPass:
                 f"Entity: {entity_name} ({signal_count} cross-layer signals today)\n{fact_lines}"
             )
 
-        memory_md = (MEMORY_ROOT / "MEMORY.md").read_text(encoding="utf-8") if (MEMORY_ROOT / "MEMORY.md").exists() else ""
+        memory_file = _memory_root() / "MEMORY.md"
+        memory_md = memory_file.read_text(encoding="utf-8") if memory_file.exists() else ""
 
         prompt = (
             "You are analyzing an AI assistant's memory system to find cross-cutting patterns.\n\n"
@@ -425,7 +443,7 @@ class ConsolidationPass:
             self.report["errors"].append(f"patterns: {e}")
 
     def _append_to_memory_md(self, insights: list[dict]) -> None:
-        memory_file = MEMORY_ROOT / "MEMORY.md"
+        memory_file = _memory_root() / "MEMORY.md"
         existing = memory_file.read_text(encoding="utf-8") if memory_file.exists() else "# How Your Owner Thinks\n\n"
 
         new_section = f"\n\n## Patterns -- {self.today}\n\n"
@@ -437,7 +455,7 @@ class ConsolidationPass:
                 new_section += f" *(signals: {entities})*"
             new_section += "\n"
 
-        memory_file.write_text(existing.rstrip() + new_section, encoding="utf-8")
+        storage._write_text_locked(memory_file, existing.rstrip() + new_section)
         logger.info(f"Promoted {len(insights)} insights to MEMORY.md")
 
     # -- Phase 4: Contradiction resolution -------------------------------------
@@ -552,7 +570,11 @@ class ConsolidationPass:
                     self.report["errors"].append(f"contradiction/{entity_name}: {e}")
 
             if entity_modified:
-                facts_file.write_text(json.dumps(facts_data, indent=2))
+                storage.update_json_file(
+                    facts_file,
+                    {"entity": entity_name, "category": self.entities[entity_name]["category"], "facts": []},
+                    lambda data, facts_data=facts_data: data.update(facts_data),
+                )
 
         self.report["contradictions_found"] = contradictions_found
         self.report["contradictions_resolved"] = contradictions_resolved
@@ -567,10 +589,11 @@ class ConsolidationPass:
     # -- Output ----------------------------------------------------------------
 
     def _write_log(self) -> None:
-        CONSOLIDATION_DIR.mkdir(parents=True, exist_ok=True)
-        log_file = CONSOLIDATION_DIR / f"{self.today}.json"
+        consolidation_dir = _consolidation_dir()
+        consolidation_dir.mkdir(parents=True, exist_ok=True)
+        log_file = consolidation_dir / f"{self.today}.json"
         self.report["completed_at"] = _now_str()
-        log_file.write_text(json.dumps(self.report, indent=2), encoding="utf-8")
+        storage._write_text_locked(log_file, json.dumps(self.report, indent=2))
         logger.info(f"Log written: {log_file}")
 
     def _write_breadcrumb(self) -> None:

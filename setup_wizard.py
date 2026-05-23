@@ -90,9 +90,9 @@ def step_interfaces() -> dict:
         config["irc_channels"] = [c.strip() for c in config["irc_channels"]]
 
     if telegram:
-        print("  You'll need TELEGRAM_BOT_TOKEN in .env")
+        print("  You'll need TELEGRAM_BOT_TOKEN in config/secrets.env")
     if slack:
-        print("  You'll need SLACK_BOT_TOKEN and SLACK_APP_TOKEN in .env")
+        print("  You'll need SLACK_BOT_TOKEN and SLACK_APP_TOKEN in config/secrets.env")
 
     return config
 
@@ -165,7 +165,7 @@ def generate_settings(identity: dict, owner: dict, interfaces: dict, memory: dic
             "irc": interfaces["irc"]
         },
         "local": {
-            "base_url": "http://100.120.50.35:8010/v1",
+            "base_url": "http://127.0.0.1:8081/v1",
             "model": "gemma4",
             "cmd": []
         },
@@ -174,6 +174,9 @@ def generate_settings(identity: dict, owner: dict, interfaces: dict, memory: dic
             "model": "google/gemma-4-31b-it",
             "fallback_model": "google/gemma-4-26b-a4b-it",
             "heartbeat_model": "google/gemini-2.0-flash-001"
+        },
+        "autoresearch": {
+            "base_url": "http://127.0.0.1:8001"
         }
     }
 
@@ -448,6 +451,11 @@ def generate_env(api: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def ensure_parent(path: Path) -> None:
+    """Create a file's parent directory if it doesn't exist."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def init_memory(memory_path: str):
     """Create the memory directory structure."""
     root = Path(memory_path).expanduser()
@@ -463,6 +471,7 @@ def init_memory(memory_path: str):
         root / "consolidation",
         root / "snapshots",
         root / "sessions",
+        root / "constitution",
     ]
     for d in dirs:
         d.mkdir(parents=True, exist_ok=True)
@@ -470,7 +479,7 @@ def init_memory(memory_path: str):
     # Initialize entities.json
     entities_file = root / "entities.json"
     if not entities_file.exists():
-        entities_file.write_text(json.dumps({"entities": {}}, indent=2))
+        entities_file.write_text(json.dumps({}, indent=2))
 
     # Initialize MEMORY.md (tacit knowledge)
     memory_md = root / "MEMORY.md"
@@ -496,42 +505,55 @@ def write_config_files(identity, owner, values, interfaces, api, memory):
     # settings.json
     settings = generate_settings(identity, owner, interfaces, memory)
     settings_path = PROJECT_ROOT / "config" / "settings.json"
+    ensure_parent(settings_path)
     settings_path.write_text(json.dumps(settings, indent=4) + "\n")
     print(f"  Written: {settings_path}")
 
     # l0_constraints.json
     constraints = generate_l0_constraints(values, owner, identity)
     constraints_path = PROJECT_ROOT / "config" / "l0_constraints.json"
+    ensure_parent(constraints_path)
     constraints_path.write_text(json.dumps(constraints, indent=2) + "\n")
     print(f"  Written: {constraints_path}")
 
     # agent_prompt.md (constitution for the system prompt)
     prompt = generate_constitution(identity, owner)
     prompt_path = PROJECT_ROOT / "config" / "agent_prompt.md"
+    ensure_parent(prompt_path)
     prompt_path.write_text(prompt)
     print(f"  Written: {prompt_path}")
 
     # constitution/L0.md
     constitution = generate_constitution(identity, owner)
     l0_path = PROJECT_ROOT / "constitution" / "L0.md"
+    ensure_parent(l0_path)
     l0_path.write_text(constitution)
     print(f"  Written: {l0_path}")
 
     # constitution/L0.hash
     l0_hash = hashlib.sha256(constitution.encode()).hexdigest()
     hash_path = PROJECT_ROOT / "constitution" / "L0.hash"
+    ensure_parent(hash_path)
     hash_path.write_text(l0_hash)
+
+    memory_constitution_path = Path(memory["memory_path"]).expanduser() / "constitution" / "L0.md"
+    ensure_parent(memory_constitution_path)
+    memory_constitution_path.write_text(constitution)
+    memory_hash_path = memory_constitution_path.with_name("L0.hash")
+    memory_hash_path.write_text(l0_hash)
     print(f"  Written: {hash_path}")
 
     # agents/owner_model.md
     model = generate_owner_model(owner)
     model_path = PROJECT_ROOT / "agents" / "owner_model.md"
+    ensure_parent(model_path)
     model_path.write_text(model)
     print(f"  Written: {model_path}")
 
-    # .env
+    # config/secrets.env
     env_content = generate_env(api)
-    env_path = PROJECT_ROOT / ".env"
+    env_path = PROJECT_ROOT / "config" / "secrets.env"
+    ensure_parent(env_path)
     env_path.write_text(env_content)
     os.chmod(env_path, 0o600)
     print(f"  Written: {env_path} (permissions: 0600)")
@@ -564,11 +586,12 @@ Next steps:
      - config/agent_prompt.md    (personality & behavior)
      - agents/owner_model.md     (tell your agent about you)
      - config/settings.json      (model selection & tuning)
+     - config/secrets.env        (API keys)
 
   2. Start your agent:
      python -m interfaces.telegram    (Telegram)
-     python -m interfaces.slack       (Slack)
-     python -m interfaces.irc         (IRC)
+     python -m interfaces.slack_interface    (Slack)
+     python -m interfaces.irc_client         (IRC)
 
   3. See examples/ for reference configurations.
 

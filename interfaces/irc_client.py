@@ -52,7 +52,7 @@ def get_channels():
 IRC_CHANNELS = get_channels()
 
 
-class Adam SeleneIRCBot(irc.bot.SingleServerIRCBot):
+class AdamSeleneIRCBot(irc.bot.SingleServerIRCBot):
     """Adam Selene's IRC presence."""
 
     def __init__(self, api_key):
@@ -191,7 +191,7 @@ def main():
         print("Error: OPENROUTER_API_KEY not set")
         sys.exit(1)
 
-    bot = Adam SeleneIRCBot(api_key)
+    bot = AdamSeleneIRCBot(api_key)
 
     print(f"{config.agent_name()} IRC bot starting...")
     print(f"Connecting to {IRC_SERVER}")

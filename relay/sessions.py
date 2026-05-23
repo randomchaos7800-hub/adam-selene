@@ -20,15 +20,11 @@ from relay import config
 
 logger = logging.getLogger(__name__)
 
-# Sessions DB lives alongside memory
-DEFAULT_DB_PATH = config.memory_root() / "sessions.db"
-
-
 class SessionStore:
     """SQLite-backed conversation persistence."""
 
     def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or DEFAULT_DB_PATH
+        self.db_path = db_path or (config.memory_root() / "sessions.db")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
