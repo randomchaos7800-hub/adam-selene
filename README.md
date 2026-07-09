@@ -50,7 +50,7 @@ The setup wizard asks for your agent's name, personality, values, and API keys �
 
 **This framework currently requires a commercial AI model via OpenRouter.** The architecture — 15K+ character system prompts, 9+ concurrent tool definitions, multi-step agentic loops — is tuned for Claude or Gemini-class instruction following. Smaller local models (7B–13B) fail silently on tool calls under this load: they narrate what they would do instead of doing it.
 
-**Local inference is the next priority.** The planned approach is slimming the skill prompt injection and reducing the active tool surface so the relay can run against a capable local model (32B+) without tool-call degradation. Until then, `google/gemini-2.0-flash-001` or `anthropic/claude-haiku-4-5` via OpenRouter are the recommended backends — both cheap and reliable at this task.
+**Local inference is the next priority.** The planned approach is slimming the skill prompt injection and reducing the active tool surface so the relay can run against a capable local model (32B+) without tool-call degradation. Until then, `z-ai/glm-4.7-flash` or `anthropic/claude-haiku-4-5` via OpenRouter are the recommended backends — both cheap and reliable at this task. (The previously recommended `google/gemini-2.0-flash-001` was retired from OpenRouter and now returns 404; verified 2026-07-08.)
 
 ## Architecture
 
