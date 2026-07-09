@@ -136,7 +136,7 @@ def generate_settings(identity: dict, owner: dict, interfaces: dict, memory: dic
         "models": {
             "main": "google/gemma-4-31b-it",
             "extraction": "google/gemma-4-26b-a4b-it",
-            "heartbeat": "google/gemini-2.0-flash-001",
+            "heartbeat": "z-ai/glm-4.7-flash",
             "local": "gemma4"
         },
         "context": {
@@ -173,7 +173,7 @@ def generate_settings(identity: dict, owner: dict, interfaces: dict, memory: dic
             "base_url": "https://openrouter.ai/api/v1",
             "model": "google/gemma-4-31b-it",
             "fallback_model": "google/gemma-4-26b-a4b-it",
-            "heartbeat_model": "google/gemini-2.0-flash-001"
+            "heartbeat_model": "z-ai/glm-4.7-flash"
         },
         "autoresearch": {
             "base_url": "http://127.0.0.1:8001"
