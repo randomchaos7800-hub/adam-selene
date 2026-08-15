@@ -37,6 +37,7 @@ from relay.relay import get_relay
 from relay.heartbeat import Heartbeat
 from relay.telegram_sender import mark_owner_responded
 from relay.goal_loop import get_goal_loop
+from relay.fact_check import check_claims
 from memory import extraction, storage
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,11 @@ SETTINGS = load_settings()
 ALLOWED_USERS = SETTINGS.get("allowed_telegram_users", [])
 EXTRACTION_TIMEOUT = SETTINGS.get("extraction", {}).get("idle_timeout_seconds", 120)
 HEARTBEAT_IDLE_MINUTES = SETTINGS.get("heartbeat", {}).get("idle_minutes", 15)
+# Default True to preserve pre-existing behavior for anyone who never set
+# this key — but previously this flag was read nowhere at all, so
+# heartbeat.enabled: false in settings.json silently did nothing and the
+# background loop ran regardless. See main()'s heartbeat init below.
+HEARTBEAT_ENABLED = SETTINGS.get("heartbeat", {}).get("enabled", True)
 
 # Extraction timer state
 _extraction_timers: dict[str, asyncio.Task] = {}
@@ -248,6 +254,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Error getting response: {e}")
         await update.message.reply_text(f"Error: {e}")
         return
+
+    # Verify any file-creation claims before this reaches the owner —
+    # runs outside the model's own reasoning, so it can't be talked past.
+    response = check_claims(response)
 
     # Telegram has a 4096 char limit
     if len(response) > 4000:
@@ -488,7 +498,11 @@ def main():
         # Pass the owner user_id so heartbeat reflects on the right conversations
         hb_user_id = config.owner_user_id()  # canonical ID matches session key
         _heartbeat = Heartbeat(idle_minutes=HEARTBEAT_IDLE_MINUTES, user_id=hb_user_id)
-        logger.info(f"Heartbeat initialized (idle threshold: {HEARTBEAT_IDLE_MINUTES}min)")
+        if not HEARTBEAT_ENABLED:
+            _heartbeat.pause()
+            logger.info("Heartbeat initialized but paused (heartbeat.enabled: false in settings.json)")
+        else:
+            logger.info(f"Heartbeat initialized (idle threshold: {HEARTBEAT_IDLE_MINUTES}min)")
     except Exception as e:
         logger.warning(f"Heartbeat init failed (non-fatal): {e}")
 

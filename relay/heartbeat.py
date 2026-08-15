@@ -186,27 +186,39 @@ class Heartbeat:
             # --- Tier 1: near-duplicates (ratio > 0.95) ---
             # Work on what's still active after Tier 0
             remaining = [f for f in active_sorted if f["id"] not in to_deactivate]
-            kept_contents: list[tuple[str, str]] = []  # (content, fact_id)
 
-            for fact in remaining:
-                content = fact.get("fact", fact.get("content", "")).strip()
-                if not content:
-                    continue
-                is_near_dup = False
-                for kept_content, kept_id in kept_contents:
-                    ratio = SequenceMatcher(None, content, kept_content).ratio()
-                    if ratio > 0.95:
-                        # Near-duplicate of a kept fact — deactivate this one
-                        to_deactivate.add(fact["id"])
-                        log_lines.append(
-                            f"T1 near-dup [{entity_name}] deactivated {fact['id']} "
-                            f"(ratio={ratio:.2f} vs {kept_id}): {content[:60]}"
-                        )
-                        stats["near_dup"] += 1
-                        is_near_dup = True
-                        break
-                if not is_near_dup:
-                    kept_contents.append((content, fact["id"]))
+            # This pass is O(n^2) (each fact compared against every kept
+            # fact so far) — cap it so one entity with a very large fact
+            # list can't turn every heartbeat tick into a quadratic scan.
+            # Tier 0 (exact-dup) results for this entity still apply below
+            # regardless — this only skips the near-dup scan itself.
+            if len(remaining) > 200:
+                logger.info(
+                    f"Skipping near-dup compaction for '{entity_name}' — "
+                    f"{len(remaining)} active facts exceeds the 200 cap"
+                )
+            else:
+                kept_contents: list[tuple[str, str]] = []  # (content, fact_id)
+
+                for fact in remaining:
+                    content = fact.get("fact", fact.get("content", "")).strip()
+                    if not content:
+                        continue
+                    is_near_dup = False
+                    for kept_content, kept_id in kept_contents:
+                        ratio = SequenceMatcher(None, content, kept_content).ratio()
+                        if ratio > 0.95:
+                            # Near-duplicate of a kept fact — deactivate this one
+                            to_deactivate.add(fact["id"])
+                            log_lines.append(
+                                f"T1 near-dup [{entity_name}] deactivated {fact['id']} "
+                                f"(ratio={ratio:.2f} vs {kept_id}): {content[:60]}"
+                            )
+                            stats["near_dup"] += 1
+                            is_near_dup = True
+                            break
+                    if not is_near_dup:
+                        kept_contents.append((content, fact["id"]))
 
             # Apply deactivations in-place
             if to_deactivate:
@@ -233,6 +245,51 @@ class Heartbeat:
                 f.write("\n".join(log_lines) + "\n")
 
         return stats
+
+    def _is_duplicate_correction(self, suggestion: str, window_hours: float = 4.0) -> bool:
+        """True if `suggestion` looks like a near-repeat of a recent LIGHTHOUSE
+        correction, so reflect() doesn't fill the journal with the same
+        observation written slightly differently every cycle.
+
+        Two independent checks against corrections modified within the last
+        `window_hours`, either firing counts as a duplicate:
+          1. word-overlap between the new suggestion and the candidate's
+             filename slug (filenames are slugified from the prior
+             suggestion's own title, via lighthouse._slug()) — >60% overlap
+          2. the new suggestion appears verbatim in the first 200 chars of
+             the candidate file's content
+
+        Deterministic, no LLM call.
+        """
+        from relay.lighthouse import LIGHTHOUSE_ROOT
+        corrections_dir = LIGHTHOUSE_ROOT / "corrections"
+        if not corrections_dir.exists():
+            return False
+
+        suggestion_words = set(re.findall(r"[a-z]+", suggestion.lower()))
+        if not suggestion_words:
+            return False
+
+        cutoff = time.time() - window_hours * 3600
+        for f in corrections_dir.glob("*.md"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    continue
+
+                filename_words = set(re.findall(r"[a-z]+", f.stem.lower()))
+                if filename_words:
+                    overlap = len(suggestion_words & filename_words) / len(suggestion_words)
+                    if overlap > 0.6:
+                        return True
+
+                content_head = f.read_text(encoding="utf-8")[:200].lower()
+                if suggestion.lower() in content_head:
+                    return True
+            except Exception as e:
+                logger.debug(f"Duplicate-correction check skipped {f}: {e}")
+                continue
+
+        return False
 
     def _parse_reflection_json(self, text: str) -> dict:
         """Extract reflection JSON from model output, tolerating formatting issues.
@@ -337,7 +394,9 @@ Respond with JSON:
         failures = analysis.get('failures', [])
         patterns = analysis.get('patterns', [])
         suggestion = analysis.get('suggestion', '').strip()
-        if suggestion and (failures or patterns):
+        if suggestion and (failures or patterns) and self._is_duplicate_correction(suggestion):
+            logger.debug(f"Heartbeat reflection: skipping near-duplicate correction: '{suggestion[:60]}'")
+        elif suggestion and (failures or patterns):
             try:
                 from relay.lighthouse import write_entry
                 lines = []

@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from telegram import Bot
 
 from relay import config
+from relay.fact_check import check_claims
 from relay.fs_utils import atomic_write_text as _atomic_write_text, exclusive_lock as _exclusive_lock
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,7 @@ def mark_agent_message_in_conversation():
 
 async def _send_telegram_message(text: str) -> dict:
     """Send message via Telegram (async)."""
+    text = check_claims(text)
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         return {"success": False, "error": "No Telegram token configured"}
