@@ -44,7 +44,7 @@ INTERFACE_TIERS: dict[str, str] = {
 # is untrusted-denied until someone deliberately opts it in here.
 UNTRUSTED_ALLOWED: frozenset[str] = frozenset({
     "read_memory", "search_memory", "list_entities", "write_memory",
-    "read_timeline", "read_tacit",
+    "read_timeline", "read_tacit", "read_memory_history",
     "read_skill",
     "read_tasks", "add_task", "complete_task",
     "lighthouse_read", "lighthouse_search",

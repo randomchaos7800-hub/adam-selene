@@ -19,6 +19,7 @@ tools:
   - read_timeline
   - read_tacit
   - review_own_conversations
+  - read_memory_history
 mutating: false
 ---
 
@@ -93,3 +94,4 @@ Answers should include:
 - `read_timeline(date)` — daily notes for a specific date
 - `read_tacit()` — owner communication patterns
 - `review_own_conversations(hours?)` — recent conversation history
+- `read_memory_history(entity, at_time)` — what was true about an entity as of a past date, including since-superseded facts

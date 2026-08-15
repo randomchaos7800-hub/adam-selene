@@ -291,8 +291,23 @@ def add_fact(
     source: str = "conversation",
     context: str = "active",
     provenance: str = DEFAULT_PROVENANCE,
+    valid_from: str | None = None,
 ) -> str:
-    """Add a fact to an entity. Returns the fact ID."""
+    """Add a fact to an entity. Returns the fact ID.
+
+    valid_from/valid_to are a bi-temporal pair, additive alongside the
+    existing status/supersededBy tracking rather than replacing it:
+    `timestamp` already records when a fact was RECORDED (ingestion time);
+    valid_from/valid_to record when it was TRUE (event time/validity
+    window), which can differ — "I switched jobs March 1" extracted from a
+    conversation on March 5 has timestamp=March 5, valid_from=March 1.
+    valid_from defaults to now (same as timestamp) when the caller doesn't
+    know a more specific event date. valid_to stays null while the fact is
+    active and gets stamped by supersede_fact() when it's replaced — this
+    is what makes facts_valid_at() answerable even for now-superseded
+    facts, which read_entity()'s active-only filter can't reconstruct at
+    all today.
+    """
     entities = load_entities()
     name_lower = entity_name.lower().replace(" ", "_")
 
@@ -318,6 +333,8 @@ def add_fact(
         "provenance": provenance,
         "status": "active",
         "supersededBy": None,
+        "valid_from": valid_from or now,
+        "valid_to": None,
         # V1 compat
         "content": content,
         "type": fact_type,
@@ -360,10 +377,45 @@ def supersede_fact(entity_name: str, old_fact_id: str, new_fact_id: str) -> bool
                 fact["status"] = "superseded"
                 fact["active"] = False
                 fact["supersededBy"] = new_fact_id
+                fact["valid_to"] = datetime.now().isoformat()
                 return True
         return False
 
     return update_json_file(facts_file, {"facts": []}, _supersede)
+
+
+def facts_valid_at(entity_name: str, at_time: str) -> list[dict]:
+    """Return facts (active or since-superseded) whose validity window
+    contains `at_time` (ISO 8601) — "what did we believe was true about
+    this entity as of this date", not just "what's true now".
+
+    Falls back gracefully for facts written before valid_from/valid_to
+    existed: treats a missing valid_from as "always valid from the
+    beginning of time" and a missing valid_to on a superseded fact as
+    "still valid" (better to over-include a legacy fact than silently
+    drop it from a historical query it has no way to opt out of).
+    """
+    entities = load_entities()
+    name_lower = entity_name.lower().replace(" ", "_")
+    if name_lower not in entities:
+        return []
+
+    facts_file = get_memory_path() / entities[name_lower]["path"] / "facts.json"
+    if not facts_file.exists():
+        return []
+
+    at = datetime.fromisoformat(at_time)
+    facts_data = json.loads(facts_file.read_text())
+    result = []
+    for fact in facts_data.get("facts", []):
+        valid_from = fact.get("valid_from")
+        valid_to = fact.get("valid_to")
+        if valid_from and datetime.fromisoformat(valid_from) > at:
+            continue
+        if valid_to and datetime.fromisoformat(valid_to) <= at:
+            continue
+        result.append(fact)
+    return result
 
 
 def search_facts(query: str) -> list[dict]:

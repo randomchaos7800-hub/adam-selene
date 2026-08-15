@@ -1214,6 +1214,8 @@ READ_TOOLS: frozenset[str] = frozenset({
     "read_current_investigation",
     # Introspection
     "list_capabilities",
+    # Bi-temporal history (registry-based)
+    "read_memory_history",
 })
 
 WRITE_TOOLS: frozenset[str] = frozenset({
@@ -1252,6 +1254,7 @@ WRITE_TOOLS: frozenset[str] = frozenset({
 # each new tool domain module — no other change to this file required.
 from relay.tool_registry import REGISTRY  # noqa: E402
 from relay.tool_domains import skills_mgmt  # noqa: E402,F401
+from relay.tool_domains import memory_history  # noqa: E402,F401
 
 
 def all_tool_definitions() -> list[dict]:
