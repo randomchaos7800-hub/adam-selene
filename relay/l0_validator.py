@@ -23,6 +23,47 @@ def load_constraints() -> dict:
     return {"constraints": {}}
 
 
+def validate_tool_call(tool_name: str, tool_input: dict) -> dict:
+    """Deterministic L0 red-flag screen on a proposed privileged tool call.
+
+    Generalizes validate_against_l0() (which only ever covered
+    update_my_instructions) to any tool whose *content* — not just the
+    caller's identity — matters. A call to write_my_code or run_shell whose
+    payload contains "bypass L0" or "hide from {owner}" is a red flag
+    regardless of whether the caller already passed the owner-identity
+    check; identity alone doesn't mean the content is safe (a manipulated
+    or compromised session is still "the owner" as far as that check goes).
+
+    This is deliberately independent of whatever the model currently has
+    in its context window — it re-derives the check from the literal tool
+    call every time, so it can't be silently skipped by anything upstream
+    dropping constraint text (compaction, a poisoned tool result biasing
+    what a summarizer keeps, etc.). Same "not foolproof, a guardrail not a
+    wall" caveat as validate_against_l0().
+
+    Args:
+        tool_name: the tool being called
+        tool_input: its arguments dict
+
+    Returns:
+        Dict with 'allowed' and 'reason', same shape as validate_against_l0().
+    """
+    # Flatten all string-valued args into one blob to scan. Covers the
+    # tools that matter here: write_my_code/edit_my_code (content/new_str),
+    # run_shell (command), git_commit (message), vault_set/store_credential
+    # (value/data), update_my_instructions (handled by the caller above via
+    # validate_against_l0, but harmless to also catch here).
+    text_parts = [tool_name]
+    for value in tool_input.values():
+        if isinstance(value, str):
+            text_parts.append(value)
+        elif isinstance(value, dict):
+            text_parts.extend(str(v) for v in value.values() if isinstance(v, str))
+    combined_text = " ".join(text_parts)
+
+    return validate_against_l0(combined_text, reasoning="")
+
+
 def validate_against_l0(proposed_change: str, reasoning: str) -> dict:
     """Check a proposed self-modification against L0 constraints.
 

@@ -85,7 +85,7 @@ def generate_tool_summary() -> str:
         elif name in ("read_tasks", "add_task", "complete_task"):
             group = "Tasks"
         elif name in ("read_my_config", "set_default_model", "update_config_setting",
-                      "restart_agent_service"):
+                      "restart_agent_service", "list_capabilities"):
             group = "Config"
         elif name in ("list_files", "read_file", "search_files", "file_info",
                       "backup_myself", "list_backups", "restore_from_backup",
@@ -1118,6 +1118,15 @@ TOOL_DEFINITIONS = [
         }
     },
     {
+        "name": "list_capabilities",
+        "description": "See which tools are available on the current channel. Untrusted interfaces (e.g. public IRC) get a narrow tool surface regardless of who's asking — use this to check what you can actually do here before attempting something that might be denied.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "fetch_url",
         "description": "Fetch content from a URL via HTTP. Supports GET and POST requests. Use this to retrieve web content, API responses, or data from external services. Content is truncated at 10KB.",
         "input_schema": {
@@ -1156,6 +1165,23 @@ PRIVILEGED_TOOLS = {
     "run_shell", "update_my_instructions",
 }
 
+# Subset of PRIVILEGED_TOOLS that also gets a deterministic L0 red-flag
+# screen on the call content, not just an identity check. These are the
+# tools where the *content* of the call (not just who's calling) matters:
+# a call whose reasoning/content contains "bypass L0" or "hide from
+# {owner}" is a red flag regardless of whether the caller is genuinely the
+# owner (a compromised or manipulated session is still the owner's
+# identity). vault_get/read_credential are read-only and excluded.
+# update_my_instructions is excluded here too — it already runs its own
+# dedicated validate_against_l0() check further down using its actual
+# new_instructions/reasoning fields; gating it here as well would just be
+# a redundant duplicate of that same check.
+L0_GUARDED_TOOLS = {
+    "vault_set", "store_credential",
+    "write_my_code", "edit_my_code", "git_commit",
+    "run_shell",
+}
+
 
 # ---------------------------------------------------------------------------
 # Read/Write classification for parallel execution in relay.py
@@ -1184,6 +1210,8 @@ READ_TOOLS: frozenset[str] = frozenset({
     "browse_url", "screenshot_url", "fetch_url",
     # Research reads
     "read_current_investigation",
+    # Introspection
+    "list_capabilities",
 })
 
 WRITE_TOOLS: frozenset[str] = frozenset({
@@ -1224,10 +1252,32 @@ def _is_owner(user_id: str) -> bool:
 def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[SessionStore] = None, user_id: str = "owner", interface: str = "unknown") -> str:
     """Execute a tool and return the result as a string."""
 
-    # Auth gate: privileged tools require owner identity
+    # Gate 1: capability check — can THIS INTERFACE reach this tool at all,
+    # independent of claimed identity? Fails closed for unrecognized
+    # interfaces. See relay/capabilities.py.
+    from relay import capabilities
+    cap_check = capabilities.check(tool_name, interface)
+    if not cap_check["allowed"]:
+        return f"Permission denied: {cap_check['reason']}"
+
+    # Gate 2: owner-identity check — privileged tools require the caller to
+    # BE the owner, on top of the interface being trusted enough to ask.
     if tool_name in PRIVILEGED_TOOLS and not _is_owner(user_id):
         logger.warning(f"Denied {tool_name} for non-owner user_id={user_id} interface={interface}")
         return f"Permission denied: '{tool_name}' requires owner authorization."
+
+    # Gate 3: L0 guardrail check on the highest-risk privileged tools —
+    # deterministic keyword screen independent of the model's own
+    # reasoning. See relay/l0_validator.py.
+    if tool_name in L0_GUARDED_TOOLS:
+        from relay.l0_validator import validate_tool_call
+        l0_check = validate_tool_call(tool_name, tool_input)
+        if not l0_check["allowed"]:
+            logger.warning(f"L0 guard blocked {tool_name}: {l0_check['reason']}")
+            return f"L0 VIOLATION — blocked: {l0_check['reason']}"
+
+    if tool_name == "list_capabilities":
+        return capabilities.list_capabilities(interface)
 
     if tool_name == "read_memory":
         entity = tool_input.get("entity", "")
@@ -1951,6 +2001,7 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
     # --- Web Fetch Tool ---
     elif tool_name == "fetch_url":
         import requests
+        from relay.net_guard import resolve_public, pin_host
 
         url = tool_input.get("url", "")
         method = tool_input.get("method", "GET").upper()
@@ -1960,20 +2011,30 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
         if not url:
             return "Error: No URL provided"
 
+        # SSRF guard: reject internal/private targets before ever touching
+        # the network, then pin the resolved IP for the actual request so a
+        # DNS-rebinding attacker can't swap the address out between the
+        # check and the connect. See relay/net_guard.py.
+        ok, reason = resolve_public(url)
+        if not ok:
+            return f"Error: blocked ({reason})"
+
         try:
             # Set timeout and size limit
             timeout = 10
             max_size = 10 * 1024  # 10KB
 
-            # Make request
-            if method == "POST":
-                if data:
-                    headers["Content-Type"] = "application/json"
-                    response = requests.post(url, json=data, headers=headers, timeout=timeout, stream=True)
+            with pin_host(url):
+                # allow_redirects=False: a validated public URL could still
+                # 302 into internal space; don't follow blind.
+                if method == "POST":
+                    if data:
+                        headers["Content-Type"] = "application/json"
+                        response = requests.post(url, json=data, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+                    else:
+                        response = requests.post(url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
                 else:
-                    response = requests.post(url, headers=headers, timeout=timeout, stream=True)
-            else:
-                response = requests.get(url, headers=headers, timeout=timeout, stream=True)
+                    response = requests.get(url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
 
             # Check status
             response.raise_for_status()

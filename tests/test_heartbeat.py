@@ -90,7 +90,12 @@ class TestHeartbeat(unittest.TestCase):
         }
         self._mock_reflection_response(payload)
 
-        with patch("relay.heartbeat.storage.log_experiment") as mock_log:
+        # This payload has failures+patterns+suggestion set, which also
+        # triggers reflect()'s real relay.lighthouse.write_entry() call —
+        # mock it too, or this test writes a live file into LIGHTHOUSE/
+        # on every run.
+        with patch("relay.heartbeat.storage.log_experiment") as mock_log, \
+             patch("relay.lighthouse.write_entry"):
             result = self._run(self.heartbeat.reflect())
 
         self.assertEqual(result, payload)
