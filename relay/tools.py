@@ -1380,7 +1380,11 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
                 return f"Failed to create entity '{entity}': {e}"
 
         try:
-            fact_id = storage.add_fact(resolved, category, fact, source="agent_conversation")
+            # agent_inferred, not owner_stated — this is the agent's own
+            # in-conversation decision to save something, not a guaranteed
+            # verbatim owner statement. See memory/storage.py's provenance
+            # taxonomy.
+            fact_id = storage.add_fact(resolved, category, fact, source="agent_conversation", provenance="agent_inferred")
             return f"Saved to {resolved}: {fact} (id: {fact_id})"
         except Exception as e:
             return f"Failed to save: {e}"

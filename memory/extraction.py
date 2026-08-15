@@ -10,6 +10,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from openai import OpenAI
@@ -81,6 +82,75 @@ def _ensure_entity(name: str, category: str) -> None:
         storage.add_entity(name, category)
     except ValueError:
         pass  # already exists
+
+
+# Below this ratio, two fact strings aren't similar enough to trust an
+# LLM's NONE ("already captured, near-identical") verdict — see
+# _verify_decision(). Deliberately the same technique (difflib
+# SequenceMatcher) heartbeat.py's own Tier 1 compaction already uses for
+# near-duplicate detection, applied here as a write-time backstop instead
+# of only a nightly one.
+_NONE_VERDICT_MIN_SIMILARITY = 0.75
+
+
+def _verify_decision(fact: dict, decision: dict, existing_facts_by_entity: dict[str, list]) -> dict:
+    """Deterministic sanity check on a Stage 2 LLM decision before it's
+    trusted.
+
+    Two independent LLM-agnostic checks — the LLM identifies semantic
+    matches (what it's good at), but freshness/dedup correctness is
+    re-derived in plain code rather than taken purely on the LLM's word
+    (current research on agent memory pipelines flags LLM-judged
+    dedup/conflict-resolution as the specific weak point in this style of
+    two-stage extraction, even for the reference implementation this
+    pipeline is modeled on):
+
+      NONE verdict ("this duplicates an existing fact, skip it") — verified
+      against the entity's existing facts via string similarity. If
+      nothing existing is actually close, the LLM's dedup claim doesn't
+      hold up; downgrade to ADD rather than silently losing a fact that
+      isn't really a duplicate.
+
+      UPDATE verdict with a supersedes_id — verified that the referenced
+      fact_id actually exists among the entity's current facts.
+      storage.supersede_fact() already no-ops safely if it doesn't, but
+      that failure was previously silent; here it's surfaced and the
+      decision downgrades to ADD instead of silently dropping the
+      supersession.
+
+    Both failure modes downgrade to ADD rather than NONE/skip — the safer
+    direction when uncertain is an extra fact in memory, not a lost one.
+    """
+    operation = decision.get("operation", "ADD")
+    entity = fact.get("entity")
+    content = (fact.get("content") or "").strip()
+
+    if operation == "NONE" and content:
+        candidates = existing_facts_by_entity.get(entity, [])
+        best_ratio = 0.0
+        for candidate in candidates:
+            candidate_text = candidate.get("fact", candidate.get("content", ""))
+            ratio = SequenceMatcher(None, content, candidate_text).ratio()
+            best_ratio = max(best_ratio, ratio)
+        if best_ratio < _NONE_VERDICT_MIN_SIMILARITY:
+            logger.info(
+                f"Overriding NONE verdict for '{content[:50]}' — best match to existing "
+                f"facts was only {best_ratio:.2f} similarity, below {_NONE_VERDICT_MIN_SIMILARITY} threshold"
+            )
+            return {**decision, "operation": "ADD", "supersedes_id": None, "reason": "verification: not actually a near-duplicate"}
+
+    if operation == "UPDATE":
+        supersedes_id = decision.get("supersedes_id")
+        candidates = existing_facts_by_entity.get(entity, [])
+        known_ids = {c.get("id") for c in candidates}
+        if supersedes_id and supersedes_id not in known_ids:
+            logger.warning(
+                f"UPDATE verdict for '{content[:50]}' references unknown fact_id "
+                f"'{supersedes_id}' for entity '{entity}' — downgrading to ADD"
+            )
+            return {**decision, "operation": "ADD", "supersedes_id": None, "reason": "verification: supersedes_id not found"}
+
+    return decision
 
 
 def _load_existing_facts_for_entities(entity_names: list[str]) -> dict[str, list]:
@@ -194,8 +264,17 @@ class Extractor:
             return {"facts": [], "new_entities": [], "timeline_entry": f"Parse error in {stage}"}
 
 
-def extract_to_memory(conversation_text: str) -> dict:
-    """Extract facts via two-stage pipeline and save to memory."""
+def extract_to_memory(conversation_text: str, provenance: str = storage.DEFAULT_PROVENANCE) -> dict:
+    """Extract facts via two-stage pipeline and save to memory.
+
+    provenance is stamped on every fact this call saves — see
+    memory.storage.VALID_PROVENANCE. Defaults to "owner_stated" (the
+    primary conversation-extraction path, unchanged from before this
+    parameter existed). Callers extracting from a less-trusted source
+    (e.g. relay/irc_memory.py's extract_irc_learnings(), which runs this
+    same pipeline over public-channel content from arbitrary third
+    parties) should pass "tool_derived" instead.
+    """
     try:
         extractor = Extractor()
     except Exception as e:
@@ -255,7 +334,7 @@ def extract_to_memory(conversation_text: str) -> dict:
         if not entity or not content:
             continue
 
-        decision = decision_by_index.get(i, {})
+        decision = _verify_decision(fact, decision_by_index.get(i, {}), existing_facts)
         operation = decision.get("operation", "ADD")
 
         if operation == "NONE":
@@ -272,7 +351,7 @@ def extract_to_memory(conversation_text: str) -> dict:
 
         # Save the fact
         try:
-            new_fact_id = storage.add_fact(entity, fact_type, content)
+            new_fact_id = storage.add_fact(entity, fact_type, content, provenance=provenance)
             facts_saved += 1
         except Exception as e:
             logger.warning(f"Failed to save fact for {entity}: {e}")
@@ -316,6 +395,6 @@ def extract_to_memory(conversation_text: str) -> dict:
     }
 
 
-def run(conversation_text: str) -> dict:
+def run(conversation_text: str, provenance: str = storage.DEFAULT_PROVENANCE) -> dict:
     """Run extraction on conversation text. Alias for extract_to_memory."""
-    return extract_to_memory(conversation_text)
+    return extract_to_memory(conversation_text, provenance=provenance)

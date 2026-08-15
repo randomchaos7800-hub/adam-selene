@@ -113,8 +113,12 @@ IRC Conversation:
 {cleaned_conversation}
 """
 
-        # Run extraction on cleaned conversation with IRC context
-        result = extraction.run(irc_context)
+        # Run extraction on cleaned conversation with IRC context. Tagged
+        # tool_derived — this is public-channel content from arbitrary
+        # third parties, not the owner's own words, so facts extracted
+        # from it are lower-trust by default (see memory/storage.py's
+        # provenance taxonomy).
+        result = extraction.run(irc_context, provenance="tool_derived")
 
         facts_added = len(result.get("processing", {}).get("added_facts", []))
         entities_added = len(result.get("processing", {}).get("added_entities", []))

@@ -50,5 +50,51 @@ class TestStorage(unittest.TestCase):
         self.assertEqual(len({f["fact"] for f in facts}), 20)
 
 
+class TestFactProvenance(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.get_path_patcher = patch("memory.storage.get_memory_path", return_value=self.root)
+        self.get_path_patcher.start()
+        self.addCleanup(self.get_path_patcher.stop)
+        self.addCleanup(self.tempdir.cleanup)
+
+        entity_dir = self.root / "life" / "areas" / "people" / "alice"
+        entity_dir.mkdir(parents=True, exist_ok=True)
+        (self.root / "entities.json").write_text(json.dumps({
+            "alice": {"category": "people", "aliases": [], "path": "life/areas/people/alice"}
+        }))
+        (entity_dir / "facts.json").write_text(json.dumps({"entity": "alice", "category": "people", "facts": []}))
+
+    def test_default_provenance_is_owner_stated(self):
+        storage.add_fact("alice", "status", "some fact")
+        facts = storage.read_entity("alice")["recent_facts"]
+        self.assertEqual(facts[0]["provenance"], "owner_stated")
+
+    def test_explicit_provenance_is_stamped(self):
+        storage.add_fact("alice", "status", "some fact", provenance="tool_derived")
+        facts = storage.read_entity("alice")["recent_facts"]
+        self.assertEqual(facts[0]["provenance"], "tool_derived")
+
+    def test_invalid_provenance_falls_back_to_agent_inferred(self):
+        storage.add_fact("alice", "status", "some fact", provenance="totally_made_up")
+        facts = storage.read_entity("alice")["recent_facts"]
+        self.assertEqual(facts[0]["provenance"], "agent_inferred")
+
+    def test_is_trusted_provenance_true_for_owner_stated(self):
+        self.assertTrue(storage.is_trusted_provenance({"provenance": "owner_stated"}))
+
+    def test_is_trusted_provenance_true_for_agent_inferred(self):
+        self.assertTrue(storage.is_trusted_provenance({"provenance": "agent_inferred"}))
+
+    def test_is_trusted_provenance_false_for_tool_derived(self):
+        self.assertFalse(storage.is_trusted_provenance({"provenance": "tool_derived"}))
+
+    def test_is_trusted_provenance_defaults_true_for_legacy_facts_without_the_field(self):
+        # Facts written before provenance existed have no field at all —
+        # must not be retroactively treated as untrusted.
+        self.assertTrue(storage.is_trusted_provenance({"fact": "old fact, no provenance field"}))
+
+
 if __name__ == "__main__":
     unittest.main()

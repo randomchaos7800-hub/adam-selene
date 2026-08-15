@@ -263,12 +263,34 @@ def read_entity(name: str) -> Optional[dict]:
 
 # --- Fact operations ---
 
+# Trust tier a fact's origin falls into — a defense against a hostile or
+# merely low-quality source silently rewriting the knowledge graph, since
+# facts can enter memory through more than just the owner's own words
+# (e.g. extract_irc_learnings() runs the same extraction pipeline over
+# public IRC channel content from arbitrary third parties):
+#   owner_stated   — extracted from or directly written by the owner's own words
+#   agent_inferred — the agent's own synthesis/decision during conversation,
+#                    not a verbatim owner statement
+#   tool_derived   — extracted from a tool result (IRC channel content, a
+#                    fetched web page, etc.) — nobody the framework already
+#                    trusts asserted this; treat it as lower-confidence
+VALID_PROVENANCE = {"owner_stated", "agent_inferred", "tool_derived"}
+DEFAULT_PROVENANCE = "owner_stated"
+
+
+def is_trusted_provenance(fact: dict) -> bool:
+    """Cheap trust check consumers (scorers, grounding checks, a future
+    memory-poisoning defense) can use without hardcoding the taxonomy."""
+    return fact.get("provenance", DEFAULT_PROVENANCE) != "tool_derived"
+
+
 def add_fact(
     entity_name: str,
     fact_type: str,
     content: str,
     source: str = "conversation",
     context: str = "active",
+    provenance: str = DEFAULT_PROVENANCE,
 ) -> str:
     """Add a fact to an entity. Returns the fact ID."""
     entities = load_entities()
@@ -276,6 +298,10 @@ def add_fact(
 
     if name_lower not in entities:
         raise ValueError(f"Entity '{entity_name}' not found")
+
+    if provenance not in VALID_PROVENANCE:
+        logger.warning(f"Unknown provenance '{provenance}' for fact on '{entity_name}' — defaulting to agent_inferred")
+        provenance = "agent_inferred"
 
     entity_data = entities[name_lower]
     facts_file = get_memory_path() / entity_data["path"] / "facts.json"
@@ -289,6 +315,7 @@ def add_fact(
         "context": context,
         "timestamp": now,
         "source": source,
+        "provenance": provenance,
         "status": "active",
         "supersededBy": None,
         # V1 compat
