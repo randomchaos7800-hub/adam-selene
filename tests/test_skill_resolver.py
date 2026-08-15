@@ -23,6 +23,34 @@ class TestBuildSkillPrompt(unittest.TestCase):
         self.assertIn(skill_resolver.SELF_LEARNING_COMPACT, prompt)
 
 
+class TestFilterToolDefinitions(unittest.TestCase):
+    def _defs(self, names):
+        return [{"name": n} for n in names]
+
+    def test_list_capabilities_always_reaches_the_model(self):
+        # Regression test: no skill's frontmatter declares
+        # list_capabilities, and ALWAYS_ON_SKILLS always contributes a
+        # non-empty tools set, so the "expose everything" fallback never
+        # fires — without ALWAYS_AVAILABLE_TOOLS, this tool was silently
+        # filtered out on every real turn despite being fully implemented.
+        with patch.object(skill_resolver, "get_skill_tools", return_value={"read_memory"}):
+            result = skill_resolver.filter_tool_definitions(
+                self._defs(["read_memory", "write_memory", "list_capabilities"]),
+                ["memory-ops"],
+            )
+        names = {t["name"] for t in result}
+        self.assertIn("list_capabilities", names)
+        self.assertIn("read_memory", names)
+        self.assertNotIn("write_memory", names)
+
+    def test_empty_allowed_tools_still_falls_back_to_everything(self):
+        with patch.object(skill_resolver, "get_skill_tools", return_value=set()):
+            result = skill_resolver.filter_tool_definitions(
+                self._defs(["a", "b"]), ["some-skill"],
+            )
+        self.assertEqual({t["name"] for t in result}, {"a", "b"})
+
+
 class TestBumpUsage(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -57,6 +85,26 @@ class TestBumpUsage(unittest.TestCase):
                 skill_resolver._bump_usage(["query"])
             except Exception as e:
                 self.fail(f"_bump_usage raised unexpectedly: {e}")
+
+    def test_concurrent_bumps_do_not_lose_increments(self):
+        # Regression test for the unlocked read-modify-write race: without
+        # locking, N concurrent _bump_usage calls for the same skill would
+        # frequently total less than N due to lost updates.
+        import threading
+
+        n_threads = 20
+
+        def _bump():
+            skill_resolver._bump_usage(["query"])
+
+        threads = [threading.Thread(target=_bump) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        data = json.loads(self.usage_path.read_text())
+        self.assertEqual(data["query"]["use_count"], n_threads)
 
 
 class TestResolveSkillsUsageIntegration(unittest.TestCase):

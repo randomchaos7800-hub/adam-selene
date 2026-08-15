@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from relay import config
+from relay.fs_utils import update_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -174,20 +175,26 @@ def _bump_usage(skill_names: list[str]) -> None:
     non-always-on skill routed to. Feeds scripts/skill_curator.py's
     active->stale->archived lifecycle for self-created skills.
 
+    Uses relay.fs_utils's locked update_json_file rather than a bare
+    read-modify-write — every message routes through here, so without a
+    lock, two resolve_skills() calls close together (e.g. concurrent
+    conversations, or a fast follow-up message) can race and silently
+    lose an increment, undercounting usage that skill_curator.py's
+    stale/archive decisions rely on.
+
     Never breaks routing on failure — this is purely observational.
     """
     try:
-        usage = json.loads(USAGE_PATH.read_text()) if USAGE_PATH.exists() else {}
-        now = datetime.now(timezone.utc).isoformat()
-        for name in skill_names:
-            if name in ALWAYS_ON_SKILLS:
-                continue
-            entry = usage.setdefault(name, {"use_count": 0, "last_used": None})
-            entry["use_count"] = entry.get("use_count", 0) + 1
-            entry["last_used"] = now
-        tmp = USAGE_PATH.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(usage, indent=2))
-        tmp.replace(USAGE_PATH)
+        def _update(usage: dict) -> None:
+            now = datetime.now(timezone.utc).isoformat()
+            for name in skill_names:
+                if name in ALWAYS_ON_SKILLS:
+                    continue
+                entry = usage.setdefault(name, {"use_count": 0, "last_used": None})
+                entry["use_count"] = entry.get("use_count", 0) + 1
+                entry["last_used"] = now
+
+        update_json_file(USAGE_PATH, {}, _update)
     except Exception as e:
         logger.debug(f"Skill usage tracking failed (non-fatal): {e}")
 
@@ -266,8 +273,24 @@ def _parse_tools(content: str) -> list[str]:
     return tools
 
 
+# Tools that must always reach the model regardless of which skills are
+# currently active. The intended "fallback: if no active skill declares
+# any tools, expose everything" safety net below never actually fires in
+# practice — ALWAYS_ON_SKILLS (memory-ops, signal-detector) always
+# declares a non-empty tools list on every single message, so
+# allowed_tools is never empty. A tool that isn't declared by ANY skill's
+# frontmatter is therefore silently unreachable no matter how useful it
+# is — this happened to list_capabilities, built specifically so the
+# model can self-check what it's allowed to do, which turned out to be
+# filtered out on every real turn. Rather than relying on every future
+# cross-cutting tool remembering to get added to some skill's frontmatter,
+# tools that are meant to always be available go here instead.
+ALWAYS_AVAILABLE_TOOLS = frozenset({"list_capabilities"})
+
+
 def filter_tool_definitions(tool_definitions: list[dict], skill_names: list[str]) -> list[dict]:
-    """Filter TOOL_DEFINITIONS to only include tools declared by active skills.
+    """Filter TOOL_DEFINITIONS to only include tools declared by active skills
+    (plus ALWAYS_AVAILABLE_TOOLS, regardless of skill filtering).
 
     This reduces the tool surface area presented to the model, focusing it on
     the tools relevant to the current skill context.
@@ -276,6 +299,7 @@ def filter_tool_definitions(tool_definitions: list[dict], skill_names: list[str]
     if not allowed_tools:
         # Fallback: if no tools resolved, return all (safety net)
         return tool_definitions
+    allowed_tools = allowed_tools | ALWAYS_AVAILABLE_TOOLS
     return [t for t in tool_definitions if t["name"] in allowed_tools]
 
 

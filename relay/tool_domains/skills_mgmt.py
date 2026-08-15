@@ -25,13 +25,14 @@ Registered via relay/tool_registry.py rather than hand-added to
 relay/tools.py's monolith — see that module's docstring for why.
 """
 
-import json
 import logging
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from relay import config
+from relay.fs_utils import read_json_file, update_json_file
 from relay.tool_registry import REGISTRY, ToolEntry
 
 logger = logging.getLogger(__name__)
@@ -76,13 +77,12 @@ def _max_self_created() -> int:
 
 
 def _load_manifest() -> dict:
-    if not MANIFEST_PATH.exists():
-        return {"skills": []}
-    return json.loads(MANIFEST_PATH.read_text())
-
-
-def _save_manifest(manifest: dict) -> None:
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2) + "\n")
+    # Locked read via relay.fs_utils, matching every other JSON store in
+    # the codebase (agenda.py, working_memory.py, memory/storage.py, ...)
+    # — an earlier version of this used plain json.loads/write_text with
+    # no locking at all, so two concurrent skill_manage calls could
+    # interleave a read and a non-atomic write and corrupt manifest.json.
+    return read_json_file(MANIFEST_PATH, {"skills": []})
 
 
 def _all_existing_triggers() -> set[str]:
@@ -112,16 +112,18 @@ def _is_self_created(name: str) -> bool:
 
 
 def _known_tool_names() -> set[str]:
-    """All tool names the framework currently knows about — deferred import
-    to avoid a circular dependency (relay.tools imports this module to
-    register skill_manage; this module can't import relay.tools at
-    module-load time without a cycle, but can safely do so inside a
-    function body called at agent runtime, long after both modules have
-    finished loading)."""
+    """All tool names the framework currently knows about — static AND
+    every registry-based toolset, not just this module's own 'skills'
+    toolset (an earlier version of this only merged 'skills', which
+    wrongly rejected any OTHER registry-based tool — e.g.
+    read_memory_history, toolset='memory' — as "unknown" when declared in
+    a self-created skill). Deferred import to avoid a circular dependency
+    (relay.tools imports this module to register skill_manage; this
+    module can't import relay.tools at module-load time without a cycle,
+    but can safely do so inside a function body called at agent runtime,
+    long after both modules have finished loading)."""
     from relay import tools as tools_module
-    names = {t["name"] for t in tools_module.TOOL_DEFINITIONS}
-    names.update(REGISTRY.list_toolsets().get("skills", []))
-    return names
+    return {t["name"] for t in tools_module.all_tool_definitions()}
 
 
 def _validate_create(name: str, description: str, content: str, triggers: list, tools: list) -> list[str]:
@@ -207,22 +209,48 @@ def _create(name: str, description: str, content: str, triggers: list, tools: li
     )
     (skill_dir / "SKILL.md").write_text(frontmatter + content.strip() + "\n")
 
-    manifest = _load_manifest()
-    manifest.setdefault("skills", []).append({
-        "name": name,
-        "path": f"{name}/SKILL.md",
-        "description": description,
-        "created_by": config.agent_name(),
-        "created_at": now,
-    })
-    _save_manifest(manifest)
+    # The cap was already checked in _validate_create() above, but that
+    # check-then-write gap is exactly a TOCTOU race: two concurrent
+    # skill_manage(action='create') calls could both pass the pre-check
+    # and together exceed the cap. Re-checking inside the SAME locked
+    # read-modify-write as the actual append closes that gap — whichever
+    # call's update runs second under the lock sees the first call's
+    # already-appended entry and correctly refuses.
+    outcome = {"applied": False, "count_after": 0}
+
+    def _append(data: dict) -> None:
+        skills = data.setdefault("skills", [])
+        self_created_count = sum(1 for s in skills if s.get("created_by"))
+        if self_created_count >= _max_self_created():
+            return  # leave data unchanged — no-op write, cap holds
+        skills.append({
+            "name": name,
+            "path": f"{name}/SKILL.md",
+            "description": description,
+            "created_by": config.agent_name(),
+            "created_at": now,
+        })
+        outcome["applied"] = True
+        outcome["count_after"] = self_created_count + 1
+
+    update_json_file(MANIFEST_PATH, {"skills": []}, _append)
+
+    if not outcome["applied"]:
+        # Lost the race — roll back the SKILL.md we already wrote so a
+        # rejected create doesn't leave an orphaned, unregistered skill
+        # directory behind.
+        shutil.rmtree(skill_dir, ignore_errors=True)
+        return (
+            f"Cannot create skill: self-created skill cap reached ({_max_self_created()}) — "
+            f"archive an unused one before creating another"
+        )
 
     from relay import skill_resolver
     skill_resolver.reload()
 
     _notify_owner(f"🧠 Learned a new skill: *{name}* — {description}")
     logger.info(f"skill_manage: created '{name}'")
-    return f"Skill '{name}' created ({len(_self_created_skills())}/{_max_self_created()} self-created slots used)."
+    return f"Skill '{name}' created ({outcome['count_after']}/{_max_self_created()} self-created slots used)."
 
 
 def _patch(name: str, old_str: str, new_str: str) -> str:
@@ -269,9 +297,10 @@ def _archive(name: str) -> str:
         dest = ARCHIVE_DIR / f"{name}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     skill_dir.rename(dest)
 
-    manifest = _load_manifest()
-    manifest["skills"] = [s for s in manifest.get("skills", []) if s["name"] != name]
-    _save_manifest(manifest)
+    def _remove(data: dict) -> None:
+        data["skills"] = [s for s in data.get("skills", []) if s["name"] != name]
+
+    update_json_file(MANIFEST_PATH, {"skills": []}, _remove)
 
     from relay import skill_resolver
     skill_resolver.reload()

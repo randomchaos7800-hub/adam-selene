@@ -1,8 +1,9 @@
 import asyncio
+import json
 import unittest
 from unittest.mock import Mock, patch
 
-from relay.goal_loop import GoalLoop, _is_enabled, _max_turns
+from relay.goal_loop import GoalLoop, _is_enabled, _max_turns, _extract_first_json_object
 
 
 def _run(coro):
@@ -71,6 +72,39 @@ class TestGoalLoopControls(unittest.TestCase):
         pause_result = loop.pause()
         self.assertTrue(pause_result["ok"])
         self.assertEqual(loop._state.status, "paused")
+
+
+class TestExtractFirstJsonObject(unittest.TestCase):
+    def test_extracts_simple_object(self):
+        self.assertEqual(_extract_first_json_object('{"done": true}'), '{"done": true}')
+
+    def test_extracts_object_embedded_in_prose(self):
+        text = 'Here is my verdict: {"done": true, "reason": "finished"} — hope that helps.'
+        self.assertEqual(_extract_first_json_object(text), '{"done": true, "reason": "finished"}')
+
+    def test_returns_none_when_no_object_present(self):
+        self.assertIsNone(_extract_first_json_object("no json here at all"))
+
+    def test_returns_none_on_unterminated_object(self):
+        self.assertIsNone(_extract_first_json_object('{"done": true'))
+
+    def test_ignores_braces_inside_string_values(self):
+        text = '{"done": false, "reason": "the {config} block needs work"}'
+        result = _extract_first_json_object(text)
+        self.assertEqual(json.loads(result), {"done": False, "reason": "the {config} block needs work"})
+
+    def test_stops_at_first_complete_object_not_greedy_to_the_last_brace(self):
+        # The actual regression this guards: a response containing TWO
+        # separate JSON-like fragments must not get spliced into one
+        # malformed blob spanning both of them.
+        text = 'Example format: {"done": false} — my actual answer: {"done": true, "reason": "done now"}'
+        result = _extract_first_json_object(text)
+        self.assertEqual(json.loads(result), {"done": False})
+
+    def test_handles_escaped_quotes_inside_string_values(self):
+        text = r'{"done": true, "reason": "user said \"stop\" explicitly"}'
+        result = _extract_first_json_object(text)
+        self.assertEqual(json.loads(result)["reason"], 'user said "stop" explicitly')
 
 
 class TestGoalReachedJudge(unittest.TestCase):

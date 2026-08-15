@@ -103,6 +103,23 @@ class TestSkillsMgmt(unittest.TestCase):
             result = self._create(name="second-skill", triggers=["another trigger here", "and one more"])
         self.assertIn("cap reached", result)
 
+    def test_create_race_at_write_time_rolls_back_skill_dir(self):
+        # Simulates the TOCTOU race directly: the pre-check (_validate_create)
+        # is bypassed, so the only thing that can catch the cap is the
+        # re-check inside the locked manifest update. Confirms that path
+        # both refuses the write AND cleans up the SKILL.md dir it had
+        # already created, rather than leaving an orphaned unregistered
+        # skill behind.
+        with patch.object(skills_mgmt, "_max_self_created", lambda: 0), \
+             patch.object(skills_mgmt, "_validate_create", return_value=[]):
+            result = self._create(name="raced-skill")
+
+        self.assertIn("cap reached", result)
+        self.assertFalse((self.skills_dir / "raced-skill").exists())
+        manifest = json.loads(self.manifest_path.read_text())
+        names = [s["name"] for s in manifest["skills"]]
+        self.assertNotIn("raced-skill", names)
+
     # --- patch ---
 
     def test_patch_self_created_skill_succeeds(self):
@@ -167,6 +184,29 @@ class TestSkillsMgmt(unittest.TestCase):
     def test_unknown_action_returns_error(self):
         result = skills_mgmt._handle_skill_manage({"action": "delete", "name": "x"})
         self.assertIn("Unknown action", result)
+
+
+class TestKnownToolNames(unittest.TestCase):
+    """_known_tool_names() itself, unmocked — the other test class patches
+    it away entirely, which would hide a regression in the real
+    implementation (it previously only merged the REGISTRY's 'skills'
+    toolset, wrongly rejecting tools registered under any other toolset,
+    like read_memory_history under 'memory')."""
+
+    def test_includes_static_tools(self):
+        names = skills_mgmt._known_tool_names()
+        self.assertIn("read_memory", names)
+        self.assertIn("write_memory", names)
+
+    def test_includes_registry_tools_from_the_skills_toolset(self):
+        names = skills_mgmt._known_tool_names()
+        self.assertIn("skill_manage", names)
+
+    def test_includes_registry_tools_from_other_toolsets(self):
+        # read_memory_history is registered under toolset='memory', not
+        # 'skills' — this is the actual regression this test guards.
+        names = skills_mgmt._known_tool_names()
+        self.assertIn("read_memory_history", names)
 
 
 if __name__ == "__main__":

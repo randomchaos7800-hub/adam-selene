@@ -38,7 +38,6 @@ new goal while one is active replaces it.
 import asyncio
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -64,6 +63,44 @@ Goal: {goal}
 
 Continue working toward this goal. If you believe it's complete, say so clearly
 and summarize what you accomplished."""
+
+
+def _extract_first_json_object(text: str) -> str | None:
+    r"""Extract the FIRST balanced {...} object from model output.
+
+    A naive greedy regex (r'\{.*\}' with DOTALL) matches from the first
+    '{' to the LAST '}' in the whole text — if the judge's response
+    contains more than one JSON-like fragment (echoing part of the
+    prompt, an example, explanatory text with its own braces), that spans
+    across all of them into one malformed blob that fails to parse. This
+    walks brace depth instead, so it returns exactly the first complete,
+    balanced object and ignores anything after it.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(text)):
+        char = text[idx]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:idx + 1]
+    return None  # unterminated — no complete object found
 
 
 def _is_enabled() -> bool:
@@ -185,10 +222,10 @@ class GoalLoop:
                 max_tokens=100,
             )
             text = judge_response.content[0].text if judge_response.content else ""
-            match = re.search(r'\{.*\}', text, re.DOTALL)
-            if not match:
+            candidate = _extract_first_json_object(text)
+            if candidate is None:
                 return False
-            data = json.loads(match.group())
+            data = json.loads(candidate)
             done = bool(data.get("done", False))
             if done:
                 state.reason = data.get("reason", "")
