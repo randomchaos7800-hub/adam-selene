@@ -170,6 +170,26 @@ class TestBiTemporalFacts(unittest.TestCase):
         result = storage.facts_valid_at("nonexistent-entity", "2026-01-01T00:00:00")
         self.assertEqual(result, [])
 
+    def test_facts_valid_at_accepts_timezone_aware_at_time(self):
+        # Stored valid_from/valid_to are always naive local time
+        # (datetime.now().isoformat()) — a tz-aware at_time (valid ISO
+        # 8601 with a UTC offset or 'Z' suffix) must not raise TypeError
+        # from comparing naive vs aware datetimes.
+        storage.add_fact("alice", "status", "current fact", valid_from="2026-01-01T00:00:00")
+        try:
+            result = storage.facts_valid_at("alice", "2026-06-01T00:00:00+00:00")
+        except TypeError as e:
+            self.fail(f"facts_valid_at raised TypeError on tz-aware at_time: {e}")
+        self.assertEqual(len(result), 1)
+
+    def test_facts_valid_at_accepts_zulu_suffix_at_time(self):
+        storage.add_fact("alice", "status", "current fact", valid_from="2026-01-01T00:00:00")
+        try:
+            result = storage.facts_valid_at("alice", "2026-06-01T00:00:00Z")
+        except TypeError as e:
+            self.fail(f"facts_valid_at raised TypeError on Z-suffixed at_time: {e}")
+        self.assertEqual(len(result), 1)
+
     def test_facts_valid_at_handles_legacy_facts_without_bi_temporal_fields(self):
         # Simulate a fact written before valid_from/valid_to existed.
         facts_file = self.root / "life" / "areas" / "people" / "alice" / "facts.json"

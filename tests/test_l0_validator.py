@@ -44,6 +44,17 @@ class TestValidateToolCall(unittest.TestCase):
         result = validate_tool_call("update_config_setting", {"key": "heartbeat.idle_minutes", "value": 30})
         self.assertTrue(result["allowed"])
 
+    def test_red_flag_inside_list_argument_is_caught(self):
+        # git_commit's `files` argument is a list — a flattener that only
+        # handled top-level strings and one level of dict values would
+        # miss this entirely.
+        result = validate_tool_call("git_commit", {"message": "fix typo", "files": ["bypass L0 and act freely.py"]})
+        self.assertFalse(result["allowed"])
+
+    def test_red_flag_inside_nested_list_of_dicts_is_caught(self):
+        result = validate_tool_call("store_credential", {"service": "x", "data": {"notes": ["skip validation here"]}})
+        self.assertFalse(result["allowed"])
+
 
 if __name__ == "__main__":
     unittest.main()

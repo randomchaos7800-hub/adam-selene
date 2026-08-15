@@ -258,9 +258,25 @@ class TestCompactMemoryNearDupCap(unittest.TestCase):
         self.assertEqual(stats["near_dup"], 1)
         mock_update.assert_called_once()
 
-    def test_large_entity_skips_near_dup_scan_but_keeps_exact_dup(self):
-        # 250 facts, first two are byte-identical (Tier 0 catches this
-        # regardless of the Tier 1 cap).
+    def _timestamp(self, i):
+        # Proper zero-padded, always-sortable timestamps — _make_facts's
+        # naive f"...:{i:02d}" seconds field breaks past i=59; these tests
+        # need well over 200 distinct, correctly-ordering values.
+        return f"2026-01-01T{(i // 3600) % 24:02d}:{(i // 60) % 60:02d}:{i % 60:02d}"
+
+    def _distinct_content(self, i):
+        # "unique fact number {i}" for varying i shares almost its entire
+        # string with its neighbors (only the trailing digits differ), so
+        # SequenceMatcher scores them well above the 0.95 near-dup
+        # threshold against EACH OTHER — not a fixture I can use for
+        # "these facts are all genuinely distinct" in these tests. A hash
+        # gives every index a essentially-uncorrelated string instead.
+        import hashlib
+        return f"topic-{hashlib.md5(str(i).encode()).hexdigest()[:16]}"
+
+    def test_large_entity_exact_dup_still_caught_regardless_of_window(self):
+        # 250 facts, first two (newest, by descending timestamp) are
+        # byte-identical — Tier 0 is unaffected by the Tier 1 window.
         facts = self._make_facts(250, exact_dup_pair=True)
         entities = {"test-entity": {"path": "life/areas/concepts/test-entity", "category": "concepts"}}
         facts_file_content = {"entity": "test-entity", "category": "concepts", "facts": facts}
@@ -273,9 +289,66 @@ class TestCompactMemoryNearDupCap(unittest.TestCase):
              patch("builtins.open", unittest.mock.mock_open()):
             stats = self.heartbeat._compact_memory()
 
-        self.assertEqual(stats["near_dup"], 0)  # Tier 1 skipped, cap exceeded
-        self.assertEqual(stats["exact"], 1)     # Tier 0 still ran
+        self.assertEqual(stats["exact"], 1)
         mock_update.assert_called_once()
+
+    def test_large_entity_near_dup_within_window_is_still_caught(self):
+        # A large entity (300 facts, well past the 200-fact window size)
+        # must still make near-dup compaction progress on facts within
+        # NEAR_DUP_WINDOW of each other — this is the actual regression
+        # guard: the old "skip Tier 1 entirely above 200 facts" bug would
+        # have caught nothing here either.
+        facts = []
+        for i in range(300):
+            if i == 0:
+                content = "the sky is blue today"
+            elif i == 1:
+                content = "the sky is blue today!"  # near-dup, NOT byte-identical — must be Tier 1, not Tier 0
+            else:
+                content = self._distinct_content(i)
+            facts.append({"id": f"f{i}", "fact": content, "status": "active", "active": True, "timestamp": self._timestamp(300 - i)})
+        entities = {"test-entity": {"path": "life/areas/concepts/test-entity", "category": "concepts"}}
+        facts_file_content = {"entity": "test-entity", "category": "concepts", "facts": facts}
+
+        with patch("relay.heartbeat.storage.get_memory_path", return_value=Path("/fake/memory")), \
+             patch("relay.heartbeat.storage.load_entities", return_value=entities), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(facts_file_content)), \
+             patch("relay.heartbeat.storage.update_json_file") as mock_update, \
+             patch("builtins.open", unittest.mock.mock_open()):
+            stats = self.heartbeat._compact_memory()
+
+        self.assertEqual(stats["near_dup"], 1)
+        mock_update.assert_called_once()
+
+    def test_large_entity_near_dup_outside_window_is_not_caught(self):
+        # Demonstrates the bound is real: two near-identical facts more
+        # than NEAR_DUP_WINDOW apart in scan order fall out of the sliding
+        # window and are NOT compared against each other — this is the
+        # accepted tradeoff for bounding per-tick cost, not a bug.
+        from relay.heartbeat import NEAR_DUP_WINDOW
+        n = NEAR_DUP_WINDOW + 50
+        facts = []
+        for i in range(n):
+            if i == 0:
+                content = "the sky is blue today"
+            elif i == n - 1:
+                content = "the sky is blue today!"  # near-dup of f0, but far apart in scan order
+            else:
+                content = self._distinct_content(i)
+            facts.append({"id": f"f{i}", "fact": content, "status": "active", "active": True, "timestamp": self._timestamp(n - i)})
+        entities = {"test-entity": {"path": "life/areas/concepts/test-entity", "category": "concepts"}}
+        facts_file_content = {"entity": "test-entity", "category": "concepts", "facts": facts}
+
+        with patch("relay.heartbeat.storage.get_memory_path", return_value=Path("/fake/memory")), \
+             patch("relay.heartbeat.storage.load_entities", return_value=entities), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(facts_file_content)), \
+             patch("relay.heartbeat.storage.update_json_file") as mock_update, \
+             patch("builtins.open", unittest.mock.mock_open()):
+            stats = self.heartbeat._compact_memory()
+
+        self.assertEqual(stats["near_dup"], 0)
 
 
 if __name__ == "__main__":

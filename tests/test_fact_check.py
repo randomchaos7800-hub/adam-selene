@@ -75,6 +75,54 @@ class TestFactCheck(unittest.TestCase):
         # real.py appears once in the original text, not duplicated into the warning
         self.assertEqual(result.count("real.py"), 1)
 
+    def test_relative_traversal_is_flagged_not_silently_verified(self):
+        # Even if _resolve_candidates() finds no candidates to check (see
+        # TestResolveCandidatesTraversal below), check_claims() must treat
+        # that as "unverified" — flag the claim — not silently drop it.
+        text = "I created `../../some-file.txt` for this."
+        result = check_claims(text)
+        self.assertIn("FACT-CHECK FAILED", result)
+
+    def test_legitimate_relative_path_within_root_still_verifies(self):
+        (self.root / "nested").mkdir()
+        (self.root / "nested" / "real.py").write_text("x = 1")
+        text = "I created `nested/real.py` for this."
+        result = check_claims(text)
+        self.assertNotIn("FACT-CHECK FAILED", result)
+
+
+class TestResolveCandidatesTraversal(unittest.TestCase):
+    """Direct unit coverage on _resolve_candidates() for the traversal fix
+    — doesn't depend on what does or doesn't exist on the real filesystem
+    outside the sandbox, just that traversal attempts yield no candidates."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.patcher = patch("relay.fact_check.config.project_root", return_value=self.root)
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+        self.addCleanup(self.tempdir.cleanup)
+
+    def test_relative_traversal_yields_no_candidates(self):
+        from relay.fact_check import _resolve_candidates
+        self.assertEqual(_resolve_candidates("../../etc/passwd"), [])
+
+    def test_tilde_traversal_outside_home_yields_no_candidates(self):
+        from relay.fact_check import _resolve_candidates
+        self.assertEqual(_resolve_candidates("~/../../../etc/passwd"), [])
+
+    def test_ordinary_relative_path_yields_one_candidate_inside_root(self):
+        from relay.fact_check import _resolve_candidates
+        candidates = _resolve_candidates("script.py")
+        self.assertEqual(len(candidates), 1)
+        self.assertTrue(candidates[0].is_relative_to(self.root.resolve()))
+
+    def test_absolute_path_yields_itself_unmodified(self):
+        from relay.fact_check import _resolve_candidates
+        candidates = _resolve_candidates("/etc/myapp/config.yaml")
+        self.assertEqual(candidates, [Path("/etc/myapp/config.yaml")])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2033,6 +2033,7 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
     # --- Web Fetch Tool ---
     elif tool_name == "fetch_url":
         import requests
+        from urllib.parse import urljoin, urlparse
         from relay.net_guard import resolve_public, pin_host
 
         url = tool_input.get("url", "")
@@ -2043,30 +2044,51 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
         if not url:
             return "Error: No URL provided"
 
-        # SSRF guard: reject internal/private targets before ever touching
-        # the network, then pin the resolved IP for the actual request so a
-        # DNS-rebinding attacker can't swap the address out between the
-        # check and the connect. See relay/net_guard.py.
-        ok, reason = resolve_public(url)
-        if not ok:
-            return f"Error: blocked ({reason})"
-
         try:
             # Set timeout and size limit
             timeout = 10
             max_size = 10 * 1024  # 10KB
+            max_redirects = 5
 
-            with pin_host(url):
-                # allow_redirects=False: a validated public URL could still
-                # 302 into internal space; don't follow blind.
-                if method == "POST":
-                    if data:
-                        headers["Content-Type"] = "application/json"
-                        response = requests.post(url, json=data, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+            # allow_redirects=False below: a validated URL could still 3xx
+            # into internal space, so redirects are never followed blind —
+            # each hop is independently re-validated through the same SSRF
+            # guard as the original URL before being followed. See
+            # relay/net_guard.py.
+            current_url = url
+            for _hop in range(max_redirects + 1):
+                ok, reason, allowed_ips = resolve_public(current_url)
+                if not ok:
+                    return f"Error: blocked ({reason})"
+
+                hostname = urlparse(current_url).hostname
+                with pin_host(hostname, allowed_ips):
+                    if method == "POST":
+                        if data:
+                            headers["Content-Type"] = "application/json"
+                            response = requests.post(current_url, json=data, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+                        else:
+                            response = requests.post(current_url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
                     else:
-                        response = requests.post(url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
-                else:
-                    response = requests.get(url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+                        response = requests.get(current_url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    break
+
+                location = response.headers.get("Location")
+                if not location:
+                    return f"Error: redirect ({response.status_code}) with no Location header from {current_url}"
+                current_url = urljoin(current_url, location)
+                # 301/302/303 conventionally downgrade POST to GET (matches
+                # browser and requests-library default behavior); 307/308
+                # preserve method and body.
+                if response.status_code in (301, 302, 303) and method == "POST":
+                    method = "GET"
+                    data = None
+            else:
+                return f"Error: too many redirects (>{max_redirects}), stopped at {current_url}"
+
+            url = current_url  # so the response below reports the final URL
 
             # Check status
             response.raise_for_status()

@@ -5,6 +5,7 @@ Phase 2 (every 30min idle): Research an agenda item → push to owner if valuabl
 """
 
 import asyncio
+from collections import deque
 from datetime import datetime
 from difflib import SequenceMatcher
 import json
@@ -26,6 +27,7 @@ MIN_CONVERSATION_LENGTH = 100  # characters
 RESEARCH_IDLE_THRESHOLD_MIN = 30  # only research if idle this long
 PUSH_QUALITY_THRESHOLD = 4       # Haiku score 1-5; push if >= this
 PUSH_RATE_LIMIT_HOURS = 4        # min hours between proactive Telegram pushes
+NEAR_DUP_WINDOW = 200            # Tier 1 compaction: max facts compared per fact (see _compact_memory)
 
 
 class Heartbeat:
@@ -131,7 +133,13 @@ class Heartbeat:
                 Keeps the newest fact, deactivates exact copies.
 
         Tier 1: Near-duplicate merging (SequenceMatcher ratio > 0.95).
-                Keeps the newest fact, deactivates near-copies.
+                Keeps the newest fact, deactivates near-copies. Each fact
+                is compared against at most NEAR_DUP_WINDOW recently-kept
+                facts (a sliding window, not the full entity history) —
+                bounds per-tick cost on a large entity without ever fully
+                disabling the pass, so a large entity still keeps making
+                progress instead of getting permanently stuck once it
+                crosses some size threshold.
 
         Both tiers are deterministic and reversible (deactivate, not delete).
         A compaction log is appended to <memory_root>/compaction.log for auditability.
@@ -187,38 +195,39 @@ class Heartbeat:
             # Work on what's still active after Tier 0
             remaining = [f for f in active_sorted if f["id"] not in to_deactivate]
 
-            # This pass is O(n^2) (each fact compared against every kept
-            # fact so far) — cap it so one entity with a very large fact
-            # list can't turn every heartbeat tick into a quadratic scan.
-            # Tier 0 (exact-dup) results for this entity still apply below
-            # regardless — this only skips the near-dup scan itself.
-            if len(remaining) > 200:
-                logger.info(
-                    f"Skipping near-dup compaction for '{entity_name}' — "
-                    f"{len(remaining)} active facts exceeds the 200 cap"
-                )
-            else:
-                kept_contents: list[tuple[str, str]] = []  # (content, fact_id)
+            # Comparing every fact against every OTHER kept fact is O(n^2)
+            # — one entity with a very large fact list would turn every
+            # heartbeat tick into a quadratic scan. Instead of skipping the
+            # whole pass above a size threshold (which would permanently
+            # disable near-dup compaction for that entity forever, since
+            # nothing else can bring an active-fact count back down),
+            # bound the comparison WINDOW instead: each fact is only
+            # compared against the NEAR_DUP_WINDOW most-recently-kept
+            # facts (remaining is newest-first, so this is a sliding
+            # window over temporally-nearby facts), capping per-fact cost
+            # at a constant regardless of entity size while still making
+            # progress across the entire fact list every tick.
+            kept_contents: deque[tuple[str, str]] = deque(maxlen=NEAR_DUP_WINDOW)
 
-                for fact in remaining:
-                    content = fact.get("fact", fact.get("content", "")).strip()
-                    if not content:
-                        continue
-                    is_near_dup = False
-                    for kept_content, kept_id in kept_contents:
-                        ratio = SequenceMatcher(None, content, kept_content).ratio()
-                        if ratio > 0.95:
-                            # Near-duplicate of a kept fact — deactivate this one
-                            to_deactivate.add(fact["id"])
-                            log_lines.append(
-                                f"T1 near-dup [{entity_name}] deactivated {fact['id']} "
-                                f"(ratio={ratio:.2f} vs {kept_id}): {content[:60]}"
-                            )
-                            stats["near_dup"] += 1
-                            is_near_dup = True
-                            break
-                    if not is_near_dup:
-                        kept_contents.append((content, fact["id"]))
+            for fact in remaining:
+                content = fact.get("fact", fact.get("content", "")).strip()
+                if not content:
+                    continue
+                is_near_dup = False
+                for kept_content, kept_id in kept_contents:
+                    ratio = SequenceMatcher(None, content, kept_content).ratio()
+                    if ratio > 0.95:
+                        # Near-duplicate of a kept fact — deactivate this one
+                        to_deactivate.add(fact["id"])
+                        log_lines.append(
+                            f"T1 near-dup [{entity_name}] deactivated {fact['id']} "
+                            f"(ratio={ratio:.2f} vs {kept_id}): {content[:60]}"
+                        )
+                        stats["near_dup"] += 1
+                        is_near_dup = True
+                        break
+                if not is_near_dup:
+                    kept_contents.append((content, fact["id"]))
 
             # Apply deactivations in-place
             if to_deactivate:

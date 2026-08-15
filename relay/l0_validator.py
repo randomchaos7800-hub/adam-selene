@@ -48,20 +48,39 @@ def validate_tool_call(tool_name: str, tool_input: dict) -> dict:
     Returns:
         Dict with 'allowed' and 'reason', same shape as validate_against_l0().
     """
-    # Flatten all string-valued args into one blob to scan. Covers the
-    # tools that matter here: write_my_code/edit_my_code (content/new_str),
-    # run_shell (command), git_commit (message), vault_set/store_credential
-    # (value/data), update_my_instructions (handled by the caller above via
-    # validate_against_l0, but harmless to also catch here).
+    # Flatten all string-valued args into one blob to scan, recursively —
+    # covers the tools that matter here: write_my_code/edit_my_code
+    # (content/new_str), run_shell (command), git_commit (message, and its
+    # list-valued files argument), vault_set/store_credential (value/data,
+    # data being an arbitrary-shaped dict), update_my_instructions (handled
+    # by the caller above via validate_against_l0, but harmless to also
+    # catch here). A single-level dict-only flatten previously missed
+    # list-valued arguments entirely (e.g. git_commit's files: [...]) —
+    # recursing through dicts, lists, and tuples closes that gap.
     text_parts = [tool_name]
-    for value in tool_input.values():
-        if isinstance(value, str):
-            text_parts.append(value)
-        elif isinstance(value, dict):
-            text_parts.extend(str(v) for v in value.values() if isinstance(v, str))
+    text_parts.extend(_extract_strings(tool_input))
     combined_text = " ".join(text_parts)
 
     return validate_against_l0(combined_text, reasoning="")
+
+
+def _extract_strings(value) -> list[str]:
+    """Recursively collect every string found anywhere in a nested
+    dict/list/tuple structure — used to scan a tool call's full argument
+    tree, not just its top-level string values."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        out = []
+        for v in value.values():
+            out.extend(_extract_strings(v))
+        return out
+    if isinstance(value, (list, tuple)):
+        out = []
+        for v in value:
+            out.extend(_extract_strings(v))
+        return out
+    return []
 
 
 def validate_against_l0(proposed_change: str, reasoning: str) -> dict:

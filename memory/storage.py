@@ -404,18 +404,36 @@ def facts_valid_at(entity_name: str, at_time: str) -> list[dict]:
     if not facts_file.exists():
         return []
 
-    at = datetime.fromisoformat(at_time)
+    at = _to_naive_local(datetime.fromisoformat(at_time))
     facts_data = json.loads(facts_file.read_text())
     result = []
     for fact in facts_data.get("facts", []):
         valid_from = fact.get("valid_from")
         valid_to = fact.get("valid_to")
-        if valid_from and datetime.fromisoformat(valid_from) > at:
+        if valid_from and _to_naive_local(datetime.fromisoformat(valid_from)) > at:
             continue
-        if valid_to and datetime.fromisoformat(valid_to) <= at:
+        if valid_to and _to_naive_local(datetime.fromisoformat(valid_to)) <= at:
             continue
         result.append(fact)
     return result
+
+
+def _to_naive_local(dt: datetime) -> datetime:
+    """Normalize a datetime to naive local time for comparison.
+
+    Every timestamp this module writes (add_fact/supersede_fact both use
+    datetime.now().isoformat(), which is naive local time) is naive.
+    facts_valid_at() accepts an at_time from a caller, which may well be
+    timezone-aware ISO 8601 (a valid '...+00:00' or 'Z'-suffixed string) —
+    comparing a naive and an aware datetime raises TypeError. Converting
+    any aware input down to naive local time keeps every comparison in
+    facts_valid_at() apples-to-apples with what's actually stored, in
+    either direction (an aware at_time, or — defensively, in case a future
+    caller writes aware timestamps into a fact — an aware stored value).
+    """
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
 
 
 def search_facts(query: str) -> list[dict]:

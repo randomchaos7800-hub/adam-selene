@@ -50,19 +50,31 @@ def _extract_claimed_paths(text: str) -> list[str]:
 
 
 def _resolve_candidates(path_str: str) -> list[Path]:
-    """Candidate real-filesystem locations for a claimed path string."""
-    candidates = []
+    """Candidate real-filesystem locations for a claimed path string.
+
+    Any candidate that would resolve outside its intended root is dropped
+    rather than checked — a claim like `../../secret.txt` (no leading '/'
+    or '~/', so it looks project-relative) must not be checkable via
+    directory traversal out of the project root, and a `~/../../etc/passwd`
+    claim must not escape the home directory either. Absolute paths (a
+    leading '/') have no root to escape from — they're checked as given.
+
+    When traversal is detected, this returns no candidates, which makes
+    check_claims() treat the claim as unverified (fails the check) rather
+    than silently ignoring it — the safe direction when a claim looks
+    like it's trying to probe outside the sandbox.
+    """
     if path_str.startswith("~/"):
-        candidates.append(Path(path_str).expanduser())
-    elif path_str.startswith("/"):
-        candidates.append(Path(path_str))
-    else:
-        candidates.append(config.project_root() / path_str)
-    # Also try relative-to-project-root even for absolute-looking paths,
-    # in case the model wrote a project-relative path with a leading slash
-    # by mistake (common enough to be worth the extra, cheap check).
-    candidates.append(config.project_root() / path_str.lstrip("/"))
-    return candidates
+        home = Path.home().resolve()
+        candidate = Path(path_str).expanduser().resolve()
+        return [candidate] if candidate.is_relative_to(home) else []
+
+    if path_str.startswith("/"):
+        return [Path(path_str)]
+
+    root = config.project_root().resolve()
+    candidate = (root / path_str).resolve()
+    return [candidate] if candidate.is_relative_to(root) else []
 
 
 def check_claims(text: str) -> str:
