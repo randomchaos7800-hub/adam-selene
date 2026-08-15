@@ -21,6 +21,7 @@ Architecture:
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -32,9 +33,22 @@ SKILLS_DIR = Path(__file__).parent.parent / "skills"
 MANIFEST_PATH = SKILLS_DIR / "manifest.json"
 RESOLVER_PATH = SKILLS_DIR / "RESOLVER.md"
 CONVENTIONS_DIR = SKILLS_DIR / "conventions"
+USAGE_PATH = SKILLS_DIR / ".usage.json"
 
 # Always-on skills — fire on every message regardless of trigger match
 ALWAYS_ON_SKILLS = frozenset({"signal-detector", "memory-ops"})
+
+# Standing self-learning nudge — always appended to the skill prompt, same
+# tier as the memory-first instruction. Keeps skill_manage from being
+# purely reactive (only used when explicitly asked to "save this as a
+# skill") by reminding the agent, every turn, that it's an option.
+SELF_LEARNING_COMPACT = (
+    "\n\nAfter completing a tricky multi-step task, fixing a non-obvious "
+    "error, or being corrected on a workflow, consider saving the approach "
+    "with skill_manage(action='create') so you don't have to re-derive it "
+    "next time. If an active self-created skill turns out to be outdated "
+    "or wrong, patch it now rather than silently working around it."
+)
 
 # Trigger patterns for each skill — compiled from SKILL.md frontmatter.
 # This is the programmatic mirror of RESOLVER.md. Both exist because:
@@ -155,6 +169,29 @@ def load_convention(name: str) -> Optional[str]:
     return None
 
 
+def _bump_usage(skill_names: list[str]) -> None:
+    """Best-effort usage telemetry — increments use_count/last_used for each
+    non-always-on skill routed to. Feeds scripts/skill_curator.py's
+    active->stale->archived lifecycle for self-created skills.
+
+    Never breaks routing on failure — this is purely observational.
+    """
+    try:
+        usage = json.loads(USAGE_PATH.read_text()) if USAGE_PATH.exists() else {}
+        now = datetime.now(timezone.utc).isoformat()
+        for name in skill_names:
+            if name in ALWAYS_ON_SKILLS:
+                continue
+            entry = usage.setdefault(name, {"use_count": 0, "last_used": None})
+            entry["use_count"] = entry.get("use_count", 0) + 1
+            entry["last_used"] = now
+        tmp = USAGE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(usage, indent=2))
+        tmp.replace(USAGE_PATH)
+    except Exception as e:
+        logger.debug(f"Skill usage tracking failed (non-fatal): {e}")
+
+
 def resolve_skills(message: str) -> list[str]:
     """Resolve which skills should be active for a given message.
 
@@ -183,7 +220,10 @@ def resolve_skills(message: str) -> list[str]:
     # Order: always-on first, then alphabetical
     always_on = sorted(s for s in matched if s in ALWAYS_ON_SKILLS)
     specific = sorted(s for s in matched if s not in ALWAYS_ON_SKILLS)
-    return always_on + specific
+    result = always_on + specific
+
+    _bump_usage(specific)
+    return result
 
 
 def get_skill_tools(skill_names: list[str]) -> set[str]:
@@ -246,10 +286,12 @@ def build_skill_prompt() -> str:
     by the agent via the read_skill tool when RESOLVER.md directs it. This keeps
     the system prompt under ~3K chars (vs 15K with all skill bodies), making it
     viable for local models and maximising prompt cache hit rate.
+
+    Always appends SELF_LEARNING_COMPACT — a fixed, small addition regardless
+    of which skill is active, same tier as the memory-first instruction.
     """
-    if RESOLVER_PATH.exists():
-        return RESOLVER_PATH.read_text()
-    return ""
+    base = RESOLVER_PATH.read_text() if RESOLVER_PATH.exists() else ""
+    return base + SELF_LEARNING_COMPACT
 
 
 def reload():

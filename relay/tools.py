@@ -59,7 +59,7 @@ def generate_tool_summary() -> str:
     """
     # Group by prefix for readability
     groups: dict[str, list[str]] = {}
-    for tool in TOOL_DEFINITIONS:
+    for tool in all_tool_definitions():
         name: str = tool["name"]
         desc: str = tool.get("description", "")
         # First sentence only
@@ -96,13 +96,15 @@ def generate_tool_summary() -> str:
             group = "Web"
         elif name in ("send_message_to_owner",):
             group = "Messaging"
+        elif name in ("skill_manage",):
+            group = "Skills"
         else:
             group = "Other"
 
         groups.setdefault(group, []).append(f"  - `{sig}` — {short_desc}")
 
     # Preferred display order
-    order = ["Memory", "Tasks", "LIGHTHOUSE", "Browser", "Web", "Discord",
+    order = ["Memory", "Tasks", "LIGHTHOUSE", "Skills", "Browser", "Web", "Discord",
              "Messaging", "GitHub", "IRC",
              "Filesystem / Self", "Config", "Other"]
 
@@ -1244,6 +1246,24 @@ WRITE_TOOLS: frozenset[str] = frozenset({
 })
 
 
+# --- Registry-based tools (self-registering domains) ---
+# Importing these modules is what triggers their tools to register into
+# REGISTRY (see relay/tool_registry.py). Add a new `import` line here for
+# each new tool domain module — no other change to this file required.
+from relay.tool_registry import REGISTRY  # noqa: E402
+from relay.tool_domains import skills_mgmt  # noqa: E402,F401
+
+
+def all_tool_definitions() -> list[dict]:
+    """TOOL_DEFINITIONS plus any dynamically self-registered tool schemas.
+
+    Callers (relay.py) should use this instead of referencing
+    TOOL_DEFINITIONS directly, so registry-based tools (skill_manage, etc.)
+    actually reach the model.
+    """
+    return TOOL_DEFINITIONS + REGISTRY.get_schemas()
+
+
 def _is_owner(user_id: str) -> bool:
     """Check if user_id matches the configured owner."""
     return user_id == config.owner_user_id()
@@ -2210,6 +2230,9 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
             return f"Added to research agenda: '{topic}' (priority {priority}). I'll look into this between conversations and reach out when I find something worth sharing."
         else:
             return f"Similar topic already in agenda: '{result.get('existing', {}).get('topic', topic)}'"
+
+    elif REGISTRY.has(tool_name):
+        return REGISTRY.dispatch(tool_name, tool_input, session_store=session_store, user_id=user_id, interface=interface)
 
     else:
         return f"Unknown tool: {tool_name}"

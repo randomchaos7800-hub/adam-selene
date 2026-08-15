@@ -34,3 +34,7 @@ agents/owner_model.md
 
 # Backups
 *.tar.gz
+
+# Runtime skill state (self-learning skills system)
+skills/.usage.json
+skills/.archive/
