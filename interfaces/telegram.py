@@ -36,6 +36,7 @@ from relay import config
 from relay.relay import get_relay
 from relay.heartbeat import Heartbeat
 from relay.telegram_sender import mark_owner_responded
+from relay.goal_loop import get_goal_loop
 from memory import extraction, storage
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/status - what's in my memory\n"
         "/entities - list known entities\n"
         "/done - force extraction now\n"
-        "/heartbeat - toggle heartbeat on/off"
+        "/heartbeat - toggle heartbeat on/off\n"
+        "/goal - autonomous multi-turn task (off by default, see README)"
     )
 
 
@@ -143,6 +145,67 @@ async def heartbeat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         _heartbeat.pause()
         await update.message.reply_text("Heartbeat paused.")
+
+
+async def goal_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /goal start|status|pause|resume|stop.
+
+    Off by default — settings.json goals.enabled must be true. See
+    relay/goal_loop.py's module docstring before turning this on: it's the
+    framework's most autonomous mode (bounded, interruptible, but
+    unattended for up to max_turns).
+    """
+    user_id = update.effective_user.id
+    if ALLOWED_USERS and user_id not in ALLOWED_USERS:
+        return
+
+    loop = get_goal_loop()
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /goal start <goal text> | status | pause | resume | stop")
+        return
+
+    sub = args[0].lower()
+    user_id_str = config.owner_user_id()
+
+    if sub == "start":
+        goal_text = " ".join(args[1:]).strip()
+        if not goal_text:
+            await update.message.reply_text("Usage: /goal start <goal text>")
+            return
+        result = loop.start(goal_text, user_id_str, interface="telegram")
+        if result.get("started"):
+            await update.message.reply_text(f"Goal started: {result['goal']} (max {result['max_turns']} turns)")
+        else:
+            await update.message.reply_text(result.get("error", "Could not start goal."))
+
+    elif sub == "status":
+        s = loop.status()
+        if not s.get("active"):
+            await update.message.reply_text("No active goal.")
+        else:
+            await update.message.reply_text(
+                f"Goal: {s['goal']}\nStatus: {s['status']}\nTurn: {s['turn']}/{s['max_turns']}"
+                + (f"\nReason: {s['reason']}" if s.get("reason") else "")
+            )
+
+    elif sub == "pause":
+        result = loop.pause()
+        await update.message.reply_text("Paused." if result.get("ok") else result.get("error", "Could not pause."))
+
+    elif sub == "resume":
+        result = loop.resume()
+        await update.message.reply_text("Resumed." if result.get("ok") else result.get("error", "Could not resume."))
+
+    elif sub == "stop":
+        result = loop.stop()
+        if result.get("ok"):
+            await update.message.reply_text(f"Stopped after {result['turns_completed']} turn(s): {result['goal']}")
+        else:
+            await update.message.reply_text(result.get("error", "Could not stop."))
+
+    else:
+        await update.message.reply_text("Usage: /goal start <goal text> | status | pause | resume | stop")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -438,6 +501,7 @@ def main():
     application.add_handler(CommandHandler("entities", entities_command))
     application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("heartbeat", heartbeat_command))
+    application.add_handler(CommandHandler("goal", goal_command))
 
     # Message handlers - order matters (more specific first)
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
