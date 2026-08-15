@@ -11,7 +11,12 @@ This module defines all tools available to the agent via the Anthropic API.
 Structure:
 1. TOOL_DEFINITIONS: Array of tool schemas for Anthropic API
    - Each tool has: name, description, input_schema (JSON Schema format)
-   - Total: 58 tools
+   - Total: 61 static tools here, plus registry-based tools from
+     relay/tool_domains/ (skill_manage, read_memory_history, ...) — see
+     all_tool_definitions() below and relay/tool_registry.py for why new
+     tool domains register that way instead of joining this list.
+     (63 total as of this writing — check all_tool_definitions() for the
+     current live count rather than trusting this comment to stay current.)
 
 2. execute_tool(): Dispatcher function that routes tool calls to handlers
    - Takes: tool_name, tool_input dict, optional session_store and user_id
@@ -59,7 +64,7 @@ def generate_tool_summary() -> str:
     """
     # Group by prefix for readability
     groups: dict[str, list[str]] = {}
-    for tool in TOOL_DEFINITIONS:
+    for tool in all_tool_definitions():
         name: str = tool["name"]
         desc: str = tool.get("description", "")
         # First sentence only
@@ -85,7 +90,7 @@ def generate_tool_summary() -> str:
         elif name in ("read_tasks", "add_task", "complete_task"):
             group = "Tasks"
         elif name in ("read_my_config", "set_default_model", "update_config_setting",
-                      "restart_agent_service"):
+                      "restart_agent_service", "list_capabilities"):
             group = "Config"
         elif name in ("list_files", "read_file", "search_files", "file_info",
                       "backup_myself", "list_backups", "restore_from_backup",
@@ -96,13 +101,15 @@ def generate_tool_summary() -> str:
             group = "Web"
         elif name in ("send_message_to_owner",):
             group = "Messaging"
+        elif name in ("skill_manage",):
+            group = "Skills"
         else:
             group = "Other"
 
         groups.setdefault(group, []).append(f"  - `{sig}` — {short_desc}")
 
     # Preferred display order
-    order = ["Memory", "Tasks", "LIGHTHOUSE", "Browser", "Web", "Discord",
+    order = ["Memory", "Tasks", "LIGHTHOUSE", "Skills", "Browser", "Web", "Discord",
              "Messaging", "GitHub", "IRC",
              "Filesystem / Self", "Config", "Other"]
 
@@ -1118,6 +1125,15 @@ TOOL_DEFINITIONS = [
         }
     },
     {
+        "name": "list_capabilities",
+        "description": "See which tools are available on the current channel. Untrusted interfaces (e.g. public IRC) get a narrow tool surface regardless of who's asking — use this to check what you can actually do here before attempting something that might be denied.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
         "name": "fetch_url",
         "description": "Fetch content from a URL via HTTP. Supports GET and POST requests. Use this to retrieve web content, API responses, or data from external services. Content is truncated at 10KB.",
         "input_schema": {
@@ -1156,6 +1172,23 @@ PRIVILEGED_TOOLS = {
     "run_shell", "update_my_instructions",
 }
 
+# Subset of PRIVILEGED_TOOLS that also gets a deterministic L0 red-flag
+# screen on the call content, not just an identity check. These are the
+# tools where the *content* of the call (not just who's calling) matters:
+# a call whose reasoning/content contains "bypass L0" or "hide from
+# {owner}" is a red flag regardless of whether the caller is genuinely the
+# owner (a compromised or manipulated session is still the owner's
+# identity). vault_get/read_credential are read-only and excluded.
+# update_my_instructions is excluded here too — it already runs its own
+# dedicated validate_against_l0() check further down using its actual
+# new_instructions/reasoning fields; gating it here as well would just be
+# a redundant duplicate of that same check.
+L0_GUARDED_TOOLS = {
+    "vault_set", "store_credential",
+    "write_my_code", "edit_my_code", "git_commit",
+    "run_shell",
+}
+
 
 # ---------------------------------------------------------------------------
 # Read/Write classification for parallel execution in relay.py
@@ -1184,6 +1217,10 @@ READ_TOOLS: frozenset[str] = frozenset({
     "browse_url", "screenshot_url", "fetch_url",
     # Research reads
     "read_current_investigation",
+    # Introspection
+    "list_capabilities",
+    # Bi-temporal history (registry-based)
+    "read_memory_history",
 })
 
 WRITE_TOOLS: frozenset[str] = frozenset({
@@ -1216,6 +1253,25 @@ WRITE_TOOLS: frozenset[str] = frozenset({
 })
 
 
+# --- Registry-based tools (self-registering domains) ---
+# Importing these modules is what triggers their tools to register into
+# REGISTRY (see relay/tool_registry.py). Add a new `import` line here for
+# each new tool domain module — no other change to this file required.
+from relay.tool_registry import REGISTRY  # noqa: E402
+from relay.tool_domains import skills_mgmt  # noqa: E402,F401
+from relay.tool_domains import memory_history  # noqa: E402,F401
+
+
+def all_tool_definitions() -> list[dict]:
+    """TOOL_DEFINITIONS plus any dynamically self-registered tool schemas.
+
+    Callers (relay.py) should use this instead of referencing
+    TOOL_DEFINITIONS directly, so registry-based tools (skill_manage, etc.)
+    actually reach the model.
+    """
+    return TOOL_DEFINITIONS + REGISTRY.get_schemas()
+
+
 def _is_owner(user_id: str) -> bool:
     """Check if user_id matches the configured owner."""
     return user_id == config.owner_user_id()
@@ -1224,10 +1280,32 @@ def _is_owner(user_id: str) -> bool:
 def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[SessionStore] = None, user_id: str = "owner", interface: str = "unknown") -> str:
     """Execute a tool and return the result as a string."""
 
-    # Auth gate: privileged tools require owner identity
+    # Gate 1: capability check — can THIS INTERFACE reach this tool at all,
+    # independent of claimed identity? Fails closed for unrecognized
+    # interfaces. See relay/capabilities.py.
+    from relay import capabilities
+    cap_check = capabilities.check(tool_name, interface)
+    if not cap_check["allowed"]:
+        return f"Permission denied: {cap_check['reason']}"
+
+    # Gate 2: owner-identity check — privileged tools require the caller to
+    # BE the owner, on top of the interface being trusted enough to ask.
     if tool_name in PRIVILEGED_TOOLS and not _is_owner(user_id):
         logger.warning(f"Denied {tool_name} for non-owner user_id={user_id} interface={interface}")
         return f"Permission denied: '{tool_name}' requires owner authorization."
+
+    # Gate 3: L0 guardrail check on the highest-risk privileged tools —
+    # deterministic keyword screen independent of the model's own
+    # reasoning. See relay/l0_validator.py.
+    if tool_name in L0_GUARDED_TOOLS:
+        from relay.l0_validator import validate_tool_call
+        l0_check = validate_tool_call(tool_name, tool_input)
+        if not l0_check["allowed"]:
+            logger.warning(f"L0 guard blocked {tool_name}: {l0_check['reason']}")
+            return f"L0 VIOLATION — blocked: {l0_check['reason']}"
+
+    if tool_name == "list_capabilities":
+        return capabilities.list_capabilities(interface)
 
     if tool_name == "read_memory":
         entity = tool_input.get("entity", "")
@@ -1310,7 +1388,11 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
                 return f"Failed to create entity '{entity}': {e}"
 
         try:
-            fact_id = storage.add_fact(resolved, category, fact, source="agent_conversation")
+            # agent_inferred, not owner_stated — this is the agent's own
+            # in-conversation decision to save something, not a guaranteed
+            # verbatim owner statement. See memory/storage.py's provenance
+            # taxonomy.
+            fact_id = storage.add_fact(resolved, category, fact, source="agent_conversation", provenance="agent_inferred")
             return f"Saved to {resolved}: {fact} (id: {fact_id})"
         except Exception as e:
             return f"Failed to save: {e}"
@@ -1951,6 +2033,8 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
     # --- Web Fetch Tool ---
     elif tool_name == "fetch_url":
         import requests
+        from urllib.parse import urljoin, urlparse
+        from relay.net_guard import resolve_public, pin_host
 
         url = tool_input.get("url", "")
         method = tool_input.get("method", "GET").upper()
@@ -1964,16 +2048,47 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
             # Set timeout and size limit
             timeout = 10
             max_size = 10 * 1024  # 10KB
+            max_redirects = 5
 
-            # Make request
-            if method == "POST":
-                if data:
-                    headers["Content-Type"] = "application/json"
-                    response = requests.post(url, json=data, headers=headers, timeout=timeout, stream=True)
-                else:
-                    response = requests.post(url, headers=headers, timeout=timeout, stream=True)
+            # allow_redirects=False below: a validated URL could still 3xx
+            # into internal space, so redirects are never followed blind —
+            # each hop is independently re-validated through the same SSRF
+            # guard as the original URL before being followed. See
+            # relay/net_guard.py.
+            current_url = url
+            for _hop in range(max_redirects + 1):
+                ok, reason, allowed_ips = resolve_public(current_url)
+                if not ok:
+                    return f"Error: blocked ({reason})"
+
+                hostname = urlparse(current_url).hostname
+                with pin_host(hostname, allowed_ips):
+                    if method == "POST":
+                        if data:
+                            headers["Content-Type"] = "application/json"
+                            response = requests.post(current_url, json=data, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+                        else:
+                            response = requests.post(current_url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+                    else:
+                        response = requests.get(current_url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
+
+                if response.status_code not in (301, 302, 303, 307, 308):
+                    break
+
+                location = response.headers.get("Location")
+                if not location:
+                    return f"Error: redirect ({response.status_code}) with no Location header from {current_url}"
+                current_url = urljoin(current_url, location)
+                # 301/302/303 conventionally downgrade POST to GET (matches
+                # browser and requests-library default behavior); 307/308
+                # preserve method and body.
+                if response.status_code in (301, 302, 303) and method == "POST":
+                    method = "GET"
+                    data = None
             else:
-                response = requests.get(url, headers=headers, timeout=timeout, stream=True)
+                return f"Error: too many redirects (>{max_redirects}), stopped at {current_url}"
+
+            url = current_url  # so the response below reports the final URL
 
             # Check status
             response.raise_for_status()
@@ -2149,6 +2264,9 @@ def execute_tool(tool_name: str, tool_input: dict, session_store: Optional[Sessi
             return f"Added to research agenda: '{topic}' (priority {priority}). I'll look into this between conversations and reach out when I find something worth sharing."
         else:
             return f"Similar topic already in agenda: '{result.get('existing', {}).get('topic', topic)}'"
+
+    elif REGISTRY.has(tool_name):
+        return REGISTRY.dispatch(tool_name, tool_input, session_store=session_store, user_id=user_id, interface=interface)
 
     else:
         return f"Unknown tool: {tool_name}"

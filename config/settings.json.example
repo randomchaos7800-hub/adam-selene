@@ -47,6 +47,17 @@
         "model_override": "haiku"
     },
 
+    "_comment_goals": "Autonomous multi-turn task loop via /goal — OFF by default. Real autonomy/safety tradeoff, read relay/goal_loop.py's docstring and the README before enabling.",
+    "goals": {
+        "enabled": false,
+        "max_turns": 10
+    },
+
+    "_comment_skills": "Self-created skill cap (via skill_manage) — see relay/tool_domains/skills_mgmt.py.",
+    "skills": {
+        "max_self_created": 15
+    },
+
     "interfaces": {
         "telegram": false,
         "slack": false,

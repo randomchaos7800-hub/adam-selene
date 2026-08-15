@@ -263,19 +263,60 @@ def read_entity(name: str) -> Optional[dict]:
 
 # --- Fact operations ---
 
+# Trust tier a fact's origin falls into — a defense against a hostile or
+# merely low-quality source silently rewriting the knowledge graph, since
+# facts can enter memory through more than just the owner's own words
+# (e.g. extract_irc_learnings() runs the same extraction pipeline over
+# public IRC channel content from arbitrary third parties):
+#   owner_stated   — extracted from or directly written by the owner's own words
+#   agent_inferred — the agent's own synthesis/decision during conversation,
+#                    not a verbatim owner statement
+#   tool_derived   — extracted from a tool result (IRC channel content, a
+#                    fetched web page, etc.) — nobody the framework already
+#                    trusts asserted this; treat it as lower-confidence
+VALID_PROVENANCE = {"owner_stated", "agent_inferred", "tool_derived"}
+DEFAULT_PROVENANCE = "owner_stated"
+
+
+def is_trusted_provenance(fact: dict) -> bool:
+    """Cheap trust check consumers (scorers, grounding checks, a future
+    memory-poisoning defense) can use without hardcoding the taxonomy."""
+    return fact.get("provenance", DEFAULT_PROVENANCE) != "tool_derived"
+
+
 def add_fact(
     entity_name: str,
     fact_type: str,
     content: str,
     source: str = "conversation",
     context: str = "active",
+    provenance: str = DEFAULT_PROVENANCE,
+    valid_from: str | None = None,
 ) -> str:
-    """Add a fact to an entity. Returns the fact ID."""
+    """Add a fact to an entity. Returns the fact ID.
+
+    valid_from/valid_to are a bi-temporal pair, additive alongside the
+    existing status/supersededBy tracking rather than replacing it:
+    `timestamp` already records when a fact was RECORDED (ingestion time);
+    valid_from/valid_to record when it was TRUE (event time/validity
+    window), which can differ — "I switched jobs March 1" extracted from a
+    conversation on March 5 has timestamp=March 5, valid_from=March 1.
+    valid_from defaults to now (same as timestamp) when the caller doesn't
+    know a more specific event date. valid_to stays null while the fact is
+    active and gets stamped by supersede_fact() when it's replaced — this
+    is what makes facts_valid_at() answerable even for now-superseded
+    facts, which read_entity()'s active-only filter can't reconstruct at
+    all today.
+    """
     entities = load_entities()
     name_lower = entity_name.lower().replace(" ", "_")
 
     if name_lower not in entities:
         raise ValueError(f"Entity '{entity_name}' not found")
+
+    if provenance not in VALID_PROVENANCE:
+        logger.warning(f"Unknown provenance '{provenance}' for fact on '{entity_name}' — defaulting to agent_inferred")
+        provenance = "agent_inferred"
 
     entity_data = entities[name_lower]
     facts_file = get_memory_path() / entity_data["path"] / "facts.json"
@@ -289,8 +330,11 @@ def add_fact(
         "context": context,
         "timestamp": now,
         "source": source,
+        "provenance": provenance,
         "status": "active",
         "supersededBy": None,
+        "valid_from": valid_from or now,
+        "valid_to": None,
         # V1 compat
         "content": content,
         "type": fact_type,
@@ -333,10 +377,63 @@ def supersede_fact(entity_name: str, old_fact_id: str, new_fact_id: str) -> bool
                 fact["status"] = "superseded"
                 fact["active"] = False
                 fact["supersededBy"] = new_fact_id
+                fact["valid_to"] = datetime.now().isoformat()
                 return True
         return False
 
     return update_json_file(facts_file, {"facts": []}, _supersede)
+
+
+def facts_valid_at(entity_name: str, at_time: str) -> list[dict]:
+    """Return facts (active or since-superseded) whose validity window
+    contains `at_time` (ISO 8601) — "what did we believe was true about
+    this entity as of this date", not just "what's true now".
+
+    Falls back gracefully for facts written before valid_from/valid_to
+    existed: treats a missing valid_from as "always valid from the
+    beginning of time" and a missing valid_to on a superseded fact as
+    "still valid" (better to over-include a legacy fact than silently
+    drop it from a historical query it has no way to opt out of).
+    """
+    entities = load_entities()
+    name_lower = entity_name.lower().replace(" ", "_")
+    if name_lower not in entities:
+        return []
+
+    facts_file = get_memory_path() / entities[name_lower]["path"] / "facts.json"
+    if not facts_file.exists():
+        return []
+
+    at = _to_naive_local(datetime.fromisoformat(at_time))
+    facts_data = json.loads(facts_file.read_text())
+    result = []
+    for fact in facts_data.get("facts", []):
+        valid_from = fact.get("valid_from")
+        valid_to = fact.get("valid_to")
+        if valid_from and _to_naive_local(datetime.fromisoformat(valid_from)) > at:
+            continue
+        if valid_to and _to_naive_local(datetime.fromisoformat(valid_to)) <= at:
+            continue
+        result.append(fact)
+    return result
+
+
+def _to_naive_local(dt: datetime) -> datetime:
+    """Normalize a datetime to naive local time for comparison.
+
+    Every timestamp this module writes (add_fact/supersede_fact both use
+    datetime.now().isoformat(), which is naive local time) is naive.
+    facts_valid_at() accepts an at_time from a caller, which may well be
+    timezone-aware ISO 8601 (a valid '...+00:00' or 'Z'-suffixed string) —
+    comparing a naive and an aware datetime raises TypeError. Converting
+    any aware input down to naive local time keeps every comparison in
+    facts_valid_at() apples-to-apples with what's actually stored, in
+    either direction (an aware at_time, or — defensively, in case a future
+    caller writes aware timestamps into a fact — an aware stored value).
+    """
+    if dt.tzinfo is not None:
+        return dt.astimezone().replace(tzinfo=None)
+    return dt
 
 
 def search_facts(query: str) -> list[dict]:

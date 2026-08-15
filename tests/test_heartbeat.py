@@ -1,6 +1,10 @@
 import asyncio
 import json
+import os
+import shutil
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -90,7 +94,12 @@ class TestHeartbeat(unittest.TestCase):
         }
         self._mock_reflection_response(payload)
 
-        with patch("relay.heartbeat.storage.log_experiment") as mock_log:
+        # This payload has failures+patterns+suggestion set, which also
+        # triggers reflect()'s real relay.lighthouse.write_entry() call —
+        # mock it too, or this test writes a live file into LIGHTHOUSE/
+        # on every run.
+        with patch("relay.heartbeat.storage.log_experiment") as mock_log, \
+             patch("relay.lighthouse.write_entry"):
             result = self._run(self.heartbeat.reflect())
 
         self.assertEqual(result, payload)
@@ -151,6 +160,195 @@ class TestHeartbeat(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         client.post.assert_awaited_once()
         self.assertEqual(client.post.await_args.args[0], "http://example:9999/search")
+
+
+class TestIsDuplicateCorrection(unittest.TestCase):
+    def setUp(self):
+        patcher_settings = patch("relay.heartbeat.config.load_settings", return_value={"openrouter": {"heartbeat_model": "hb-model"}})
+        patcher_snapshot = patch("relay.heartbeat.SnapshotManager")
+        patcher_switchboard = patch("relay.heartbeat.Switchboard")
+        patcher_sessions = patch("relay.heartbeat.SessionStore")
+        patcher_memory_root = patch("relay.heartbeat.config.memory_root", return_value=Path("/tmp/test-memory"))
+        for p in (patcher_settings, patcher_snapshot, patcher_switchboard, patcher_sessions, patcher_memory_root):
+            p.start()
+            self.addCleanup(p.stop)
+        self.heartbeat = Heartbeat(user_id="test-user")
+
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.lighthouse_root = Path(self.tempdir.name)
+        self.corrections_dir = self.lighthouse_root / "corrections"
+        self.corrections_dir.mkdir(parents=True)
+        self.addCleanup(self.tempdir.cleanup)
+        self.lh_patcher = patch("relay.lighthouse.LIGHTHOUSE_ROOT", self.lighthouse_root)
+        self.lh_patcher.start()
+        self.addCleanup(self.lh_patcher.stop)
+
+    def _write_correction(self, filename: str, content: str = "some content here"):
+        (self.corrections_dir / filename).write_text(content)
+
+    def test_no_corrections_dir_returns_false(self):
+        shutil.rmtree(self.corrections_dir)
+        self.assertFalse(self.heartbeat._is_duplicate_correction("try using memory better"))
+
+    def test_no_matching_file_returns_false(self):
+        self._write_correction("2026-01-01_0000_completely-unrelated-topic.md", "unrelated body")
+        self.assertFalse(self.heartbeat._is_duplicate_correction("try using memory better today"))
+
+    def test_high_word_overlap_with_filename_is_duplicate(self):
+        self._write_correction("2026-01-01_0000_try-using-memory-better.md", "unrelated body text")
+        self.assertTrue(self.heartbeat._is_duplicate_correction("try using memory better"))
+
+    def test_verbatim_substring_in_content_is_duplicate(self):
+        self._write_correction(
+            "2026-01-01_0000_something-else-entirely.md",
+            "Suggested change: try using memory better next time",
+        )
+        self.assertTrue(self.heartbeat._is_duplicate_correction("try using memory better"))
+
+    def test_old_file_outside_window_is_ignored(self):
+        path = self.corrections_dir / "2026-01-01_0000_try-using-memory-better.md"
+        path.write_text("unrelated body")
+        old_time = time.time() - (5 * 3600)  # 5 hours ago, outside 4h window
+        os.utime(path, (old_time, old_time))
+        self.assertFalse(self.heartbeat._is_duplicate_correction("try using memory better"))
+
+    def test_recent_file_within_window_is_checked(self):
+        path = self.corrections_dir / "2026-01-01_0000_try-using-memory-better.md"
+        path.write_text("unrelated body")
+        recent_time = time.time() - (2 * 3600)  # 2 hours ago, inside 4h window
+        os.utime(path, (recent_time, recent_time))
+        self.assertTrue(self.heartbeat._is_duplicate_correction("try using memory better"))
+
+
+class TestCompactMemoryNearDupCap(unittest.TestCase):
+    def setUp(self):
+        patcher_settings = patch("relay.heartbeat.config.load_settings", return_value={"openrouter": {"heartbeat_model": "hb-model"}})
+        patcher_snapshot = patch("relay.heartbeat.SnapshotManager")
+        patcher_switchboard = patch("relay.heartbeat.Switchboard")
+        patcher_sessions = patch("relay.heartbeat.SessionStore")
+        patcher_memory_root = patch("relay.heartbeat.config.memory_root", return_value=Path("/tmp/test-memory"))
+        for p in (patcher_settings, patcher_snapshot, patcher_switchboard, patcher_sessions, patcher_memory_root):
+            p.start()
+            self.addCleanup(p.stop)
+        self.heartbeat = Heartbeat(user_id="test-user")
+
+    def _make_facts(self, n, exact_dup_pair=False):
+        facts = []
+        for i in range(n):
+            content = "duplicate content here" if (exact_dup_pair and i < 2) else f"unique fact number {i}"
+            facts.append({"id": f"f{i}", "fact": content, "status": "active", "active": True, "timestamp": f"2026-01-01T00:00:{i:02d}"})
+        return facts
+
+    def test_small_entity_runs_near_dup_scan(self):
+        facts = [
+            {"id": "f0", "fact": "the sky is blue today", "status": "active", "active": True, "timestamp": "2026-01-01T00:00:01"},
+            {"id": "f1", "fact": "the sky is blue today!", "status": "active", "active": True, "timestamp": "2026-01-01T00:00:02"},
+        ]
+        entities = {"test-entity": {"path": "life/areas/concepts/test-entity", "category": "concepts"}}
+        facts_file_content = {"entity": "test-entity", "category": "concepts", "facts": facts}
+
+        with patch("relay.heartbeat.storage.get_memory_path", return_value=Path("/fake/memory")), \
+             patch("relay.heartbeat.storage.load_entities", return_value=entities), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(facts_file_content)), \
+             patch("relay.heartbeat.storage.update_json_file") as mock_update, \
+             patch("builtins.open", unittest.mock.mock_open()):
+            stats = self.heartbeat._compact_memory()
+
+        self.assertEqual(stats["near_dup"], 1)
+        mock_update.assert_called_once()
+
+    def _timestamp(self, i):
+        # Proper zero-padded, always-sortable timestamps — _make_facts's
+        # naive f"...:{i:02d}" seconds field breaks past i=59; these tests
+        # need well over 200 distinct, correctly-ordering values.
+        return f"2026-01-01T{(i // 3600) % 24:02d}:{(i // 60) % 60:02d}:{i % 60:02d}"
+
+    def _distinct_content(self, i):
+        # "unique fact number {i}" for varying i shares almost its entire
+        # string with its neighbors (only the trailing digits differ), so
+        # SequenceMatcher scores them well above the 0.95 near-dup
+        # threshold against EACH OTHER — not a fixture I can use for
+        # "these facts are all genuinely distinct" in these tests. A hash
+        # gives every index a essentially-uncorrelated string instead.
+        import hashlib
+        return f"topic-{hashlib.md5(str(i).encode()).hexdigest()[:16]}"
+
+    def test_large_entity_exact_dup_still_caught_regardless_of_window(self):
+        # 250 facts, first two (newest, by descending timestamp) are
+        # byte-identical — Tier 0 is unaffected by the Tier 1 window.
+        facts = self._make_facts(250, exact_dup_pair=True)
+        entities = {"test-entity": {"path": "life/areas/concepts/test-entity", "category": "concepts"}}
+        facts_file_content = {"entity": "test-entity", "category": "concepts", "facts": facts}
+
+        with patch("relay.heartbeat.storage.get_memory_path", return_value=Path("/fake/memory")), \
+             patch("relay.heartbeat.storage.load_entities", return_value=entities), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(facts_file_content)), \
+             patch("relay.heartbeat.storage.update_json_file") as mock_update, \
+             patch("builtins.open", unittest.mock.mock_open()):
+            stats = self.heartbeat._compact_memory()
+
+        self.assertEqual(stats["exact"], 1)
+        mock_update.assert_called_once()
+
+    def test_large_entity_near_dup_within_window_is_still_caught(self):
+        # A large entity (300 facts, well past the 200-fact window size)
+        # must still make near-dup compaction progress on facts within
+        # NEAR_DUP_WINDOW of each other — this is the actual regression
+        # guard: the old "skip Tier 1 entirely above 200 facts" bug would
+        # have caught nothing here either.
+        facts = []
+        for i in range(300):
+            if i == 0:
+                content = "the sky is blue today"
+            elif i == 1:
+                content = "the sky is blue today!"  # near-dup, NOT byte-identical — must be Tier 1, not Tier 0
+            else:
+                content = self._distinct_content(i)
+            facts.append({"id": f"f{i}", "fact": content, "status": "active", "active": True, "timestamp": self._timestamp(300 - i)})
+        entities = {"test-entity": {"path": "life/areas/concepts/test-entity", "category": "concepts"}}
+        facts_file_content = {"entity": "test-entity", "category": "concepts", "facts": facts}
+
+        with patch("relay.heartbeat.storage.get_memory_path", return_value=Path("/fake/memory")), \
+             patch("relay.heartbeat.storage.load_entities", return_value=entities), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(facts_file_content)), \
+             patch("relay.heartbeat.storage.update_json_file") as mock_update, \
+             patch("builtins.open", unittest.mock.mock_open()):
+            stats = self.heartbeat._compact_memory()
+
+        self.assertEqual(stats["near_dup"], 1)
+        mock_update.assert_called_once()
+
+    def test_large_entity_near_dup_outside_window_is_not_caught(self):
+        # Demonstrates the bound is real: two near-identical facts more
+        # than NEAR_DUP_WINDOW apart in scan order fall out of the sliding
+        # window and are NOT compared against each other — this is the
+        # accepted tradeoff for bounding per-tick cost, not a bug.
+        from relay.heartbeat import NEAR_DUP_WINDOW
+        n = NEAR_DUP_WINDOW + 50
+        facts = []
+        for i in range(n):
+            if i == 0:
+                content = "the sky is blue today"
+            elif i == n - 1:
+                content = "the sky is blue today!"  # near-dup of f0, but far apart in scan order
+            else:
+                content = self._distinct_content(i)
+            facts.append({"id": f"f{i}", "fact": content, "status": "active", "active": True, "timestamp": self._timestamp(n - i)})
+        entities = {"test-entity": {"path": "life/areas/concepts/test-entity", "category": "concepts"}}
+        facts_file_content = {"entity": "test-entity", "category": "concepts", "facts": facts}
+
+        with patch("relay.heartbeat.storage.get_memory_path", return_value=Path("/fake/memory")), \
+             patch("relay.heartbeat.storage.load_entities", return_value=entities), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.read_text", return_value=json.dumps(facts_file_content)), \
+             patch("relay.heartbeat.storage.update_json_file") as mock_update, \
+             patch("builtins.open", unittest.mock.mock_open()):
+            stats = self.heartbeat._compact_memory()
+
+        self.assertEqual(stats["near_dup"], 0)
 
 
 if __name__ == "__main__":

@@ -33,13 +33,13 @@ class TestToolDispatch(unittest.TestCase):
         self.assertIn("google/gemma-4-31b-it", result)
 
     def test_set_default_model_via_execute_tool(self):
-        result = execute_tool("set_default_model", {"model_name": "haiku"}, user_id="owner")
+        result = execute_tool("set_default_model", {"model_name": "haiku"}, user_id="owner", interface="telegram")
         cfg = json.loads(self.settings_file.read_text())
         self.assertIn("Default model changed", result)
         self.assertEqual(cfg["models"]["main"], "anthropic/claude-3.5-haiku")
 
     def test_update_config_setting_via_execute_tool(self):
-        result = execute_tool("update_config_setting", {"key": "heartbeat.idle_minutes", "value": 30}, user_id="owner")
+        result = execute_tool("update_config_setting", {"key": "heartbeat.idle_minutes", "value": 30}, user_id="owner", interface="telegram")
         cfg = json.loads(self.settings_file.read_text())
         self.assertIn("Updated heartbeat.idle_minutes", result)
         self.assertEqual(cfg["heartbeat"]["idle_minutes"], 30)
@@ -50,7 +50,7 @@ class TestToolDispatch(unittest.TestCase):
             "message": "created",
             "repo_url": "https://github.com/example/repo",
         }):
-            result = execute_tool("github_create_repo", {"repo_name": "repo"}, user_id="owner")
+            result = execute_tool("github_create_repo", {"repo_name": "repo"}, user_id="owner", interface="telegram")
 
         self.assertIn("Repository URL: https://github.com/example/repo", result)
 
@@ -59,7 +59,7 @@ class TestToolDispatch(unittest.TestCase):
             "success": True,
             "file": {"path": "README.md", "content": "hello"},
         }):
-            result = execute_tool("github_get_file_content", {"repo_name": "repo", "file_path": "README.md"}, user_id="owner")
+            result = execute_tool("github_get_file_content", {"repo_name": "repo", "file_path": "README.md"}, user_id="owner", interface="telegram")
 
         self.assertEqual(result, "File: README.md\n\nhello")
 

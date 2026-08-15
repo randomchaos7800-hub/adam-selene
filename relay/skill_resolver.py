@@ -21,10 +21,12 @@ Architecture:
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from relay import config
+from relay.fs_utils import update_json_file
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +34,22 @@ SKILLS_DIR = Path(__file__).parent.parent / "skills"
 MANIFEST_PATH = SKILLS_DIR / "manifest.json"
 RESOLVER_PATH = SKILLS_DIR / "RESOLVER.md"
 CONVENTIONS_DIR = SKILLS_DIR / "conventions"
+USAGE_PATH = SKILLS_DIR / ".usage.json"
 
 # Always-on skills — fire on every message regardless of trigger match
 ALWAYS_ON_SKILLS = frozenset({"signal-detector", "memory-ops"})
+
+# Standing self-learning nudge — always appended to the skill prompt, same
+# tier as the memory-first instruction. Keeps skill_manage from being
+# purely reactive (only used when explicitly asked to "save this as a
+# skill") by reminding the agent, every turn, that it's an option.
+SELF_LEARNING_COMPACT = (
+    "\n\nAfter completing a tricky multi-step task, fixing a non-obvious "
+    "error, or being corrected on a workflow, consider saving the approach "
+    "with skill_manage(action='create') so you don't have to re-derive it "
+    "next time. If an active self-created skill turns out to be outdated "
+    "or wrong, patch it now rather than silently working around it."
+)
 
 # Trigger patterns for each skill — compiled from SKILL.md frontmatter.
 # This is the programmatic mirror of RESOLVER.md. Both exist because:
@@ -155,6 +170,35 @@ def load_convention(name: str) -> Optional[str]:
     return None
 
 
+def _bump_usage(skill_names: list[str]) -> None:
+    """Best-effort usage telemetry — increments use_count/last_used for each
+    non-always-on skill routed to. Feeds scripts/skill_curator.py's
+    active->stale->archived lifecycle for self-created skills.
+
+    Uses relay.fs_utils's locked update_json_file rather than a bare
+    read-modify-write — every message routes through here, so without a
+    lock, two resolve_skills() calls close together (e.g. concurrent
+    conversations, or a fast follow-up message) can race and silently
+    lose an increment, undercounting usage that skill_curator.py's
+    stale/archive decisions rely on.
+
+    Never breaks routing on failure — this is purely observational.
+    """
+    try:
+        def _update(usage: dict) -> None:
+            now = datetime.now(timezone.utc).isoformat()
+            for name in skill_names:
+                if name in ALWAYS_ON_SKILLS:
+                    continue
+                entry = usage.setdefault(name, {"use_count": 0, "last_used": None})
+                entry["use_count"] = entry.get("use_count", 0) + 1
+                entry["last_used"] = now
+
+        update_json_file(USAGE_PATH, {}, _update)
+    except Exception as e:
+        logger.debug(f"Skill usage tracking failed (non-fatal): {e}")
+
+
 def resolve_skills(message: str) -> list[str]:
     """Resolve which skills should be active for a given message.
 
@@ -183,7 +227,10 @@ def resolve_skills(message: str) -> list[str]:
     # Order: always-on first, then alphabetical
     always_on = sorted(s for s in matched if s in ALWAYS_ON_SKILLS)
     specific = sorted(s for s in matched if s not in ALWAYS_ON_SKILLS)
-    return always_on + specific
+    result = always_on + specific
+
+    _bump_usage(specific)
+    return result
 
 
 def get_skill_tools(skill_names: list[str]) -> set[str]:
@@ -226,8 +273,24 @@ def _parse_tools(content: str) -> list[str]:
     return tools
 
 
+# Tools that must always reach the model regardless of which skills are
+# currently active. The intended "fallback: if no active skill declares
+# any tools, expose everything" safety net below never actually fires in
+# practice — ALWAYS_ON_SKILLS (memory-ops, signal-detector) always
+# declares a non-empty tools list on every single message, so
+# allowed_tools is never empty. A tool that isn't declared by ANY skill's
+# frontmatter is therefore silently unreachable no matter how useful it
+# is — this happened to list_capabilities, built specifically so the
+# model can self-check what it's allowed to do, which turned out to be
+# filtered out on every real turn. Rather than relying on every future
+# cross-cutting tool remembering to get added to some skill's frontmatter,
+# tools that are meant to always be available go here instead.
+ALWAYS_AVAILABLE_TOOLS = frozenset({"list_capabilities"})
+
+
 def filter_tool_definitions(tool_definitions: list[dict], skill_names: list[str]) -> list[dict]:
-    """Filter TOOL_DEFINITIONS to only include tools declared by active skills.
+    """Filter TOOL_DEFINITIONS to only include tools declared by active skills
+    (plus ALWAYS_AVAILABLE_TOOLS, regardless of skill filtering).
 
     This reduces the tool surface area presented to the model, focusing it on
     the tools relevant to the current skill context.
@@ -236,6 +299,7 @@ def filter_tool_definitions(tool_definitions: list[dict], skill_names: list[str]
     if not allowed_tools:
         # Fallback: if no tools resolved, return all (safety net)
         return tool_definitions
+    allowed_tools = allowed_tools | ALWAYS_AVAILABLE_TOOLS
     return [t for t in tool_definitions if t["name"] in allowed_tools]
 
 
@@ -246,10 +310,12 @@ def build_skill_prompt() -> str:
     by the agent via the read_skill tool when RESOLVER.md directs it. This keeps
     the system prompt under ~3K chars (vs 15K with all skill bodies), making it
     viable for local models and maximising prompt cache hit rate.
+
+    Always appends SELF_LEARNING_COMPACT — a fixed, small addition regardless
+    of which skill is active, same tier as the memory-first instruction.
     """
-    if RESOLVER_PATH.exists():
-        return RESOLVER_PATH.read_text()
-    return ""
+    base = RESOLVER_PATH.read_text() if RESOLVER_PATH.exists() else ""
+    return base + SELF_LEARNING_COMPACT
 
 
 def reload():

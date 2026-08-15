@@ -9,3 +9,4 @@ feedparser>=6.0
 requests>=2.32
 pyyaml>=6.0
 firecrawl-py>=4.0
+pyjwt[crypto]>=2.8

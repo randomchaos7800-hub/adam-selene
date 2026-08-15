@@ -5,10 +5,13 @@
     "fact": "string (the fact content)",
     "category": "status|milestone|constraint|preference|relationship|decision",
     "context": "active|staged|historical",
-    "timestamp": "ISO 8601 datetime",
+    "timestamp": "ISO 8601 datetime — when the fact was RECORDED (ingestion time)",
     "source": "conversation|extraction|heartbeat|synthesis",
+    "provenance": "owner_stated|agent_inferred|tool_derived — trust tier of the fact's origin; see storage.VALID_PROVENANCE. Missing on facts written before this field existed, treated as trusted by storage.is_trusted_provenance()",
     "status": "active|superseded",
     "supersededBy": "string|null (fact ID that replaced this)",
+    "valid_from": "ISO 8601 datetime — when the fact became TRUE (event time). Defaults to timestamp when the caller doesn't know a more specific event date; can differ from timestamp (e.g. a fact recorded days after the event it describes)",
+    "valid_to": "ISO 8601 datetime|null — when the fact stopped being true. Null while active; stamped by supersede_fact() when replaced. Together with valid_from, lets storage.facts_valid_at() answer 'what was true as of date X' even for since-superseded facts, which read_entity()'s active-only filter can't reconstruct",
     "content": "string (V1 compat, same as 'fact')",
     "type": "string (V1 compat, same as 'category')",
     "extracted": "string (V1 compat, same as 'timestamp')",
@@ -19,9 +22,10 @@
     "aliases": ["array of alternative names"],
     "path": "life/areas/{category}/{name}"
   },
-  "notes": {
+  "notes": [
     "V1 fields (content, type, extracted, active) kept for backward compatibility",
     "V2 fields (fact, category, context, timestamp, source, status, supersededBy) are canonical",
+    "provenance and valid_from/valid_to are additive fields on top of V2 — both optional on read (missing on any fact written before they existed), always written on new facts",
     "Both schemas read correctly by storage.py"
-  }
+  ]
 }

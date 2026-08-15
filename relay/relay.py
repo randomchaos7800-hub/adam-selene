@@ -34,7 +34,7 @@ load_dotenv(Path(__file__).parent.parent / "config" / "secrets.env")
 from memory import storage, extraction
 from relay.sessions import SessionStore
 from relay.switchboard import Switchboard
-from relay.tools import TOOL_DEFINITIONS, READ_TOOLS, execute_tool, generate_tool_summary
+from relay.tools import READ_TOOLS, execute_tool, generate_tool_summary, all_tool_definitions
 from relay import skill_resolver
 from relay import session_log
 from relay.working_memory import log_failure
@@ -128,7 +128,7 @@ class RelayV3:
         self.switchboard = Switchboard(memory_path)
         self.session_store = SessionStore()
         storage.init_memory()
-        self.tools = TOOL_DEFINITIONS
+        self.tools = all_tool_definitions()
         self._valid_tool_names = frozenset(t["name"] for t in self.tools)
 
         settings = _load_settings()

@@ -63,6 +63,11 @@
       "name": "comms",
       "path": "comms/SKILL.md",
       "description": "Proactive messaging to owner via primary interface. Rate-limited, quality-gated."
+    },
+    {
+      "name": "learn",
+      "path": "learn/SKILL.md",
+      "description": "Distill a conversation or corrected mistake into a durable skill via skill_manage."
     }
   ],
   "resolver": "RESOLVER.md",

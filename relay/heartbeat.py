@@ -5,6 +5,7 @@ Phase 2 (every 30min idle): Research an agenda item → push to owner if valuabl
 """
 
 import asyncio
+from collections import deque
 from datetime import datetime
 from difflib import SequenceMatcher
 import json
@@ -26,6 +27,7 @@ MIN_CONVERSATION_LENGTH = 100  # characters
 RESEARCH_IDLE_THRESHOLD_MIN = 30  # only research if idle this long
 PUSH_QUALITY_THRESHOLD = 4       # Haiku score 1-5; push if >= this
 PUSH_RATE_LIMIT_HOURS = 4        # min hours between proactive Telegram pushes
+NEAR_DUP_WINDOW = 200            # Tier 1 compaction: max facts compared per fact (see _compact_memory)
 
 
 class Heartbeat:
@@ -131,7 +133,13 @@ class Heartbeat:
                 Keeps the newest fact, deactivates exact copies.
 
         Tier 1: Near-duplicate merging (SequenceMatcher ratio > 0.95).
-                Keeps the newest fact, deactivates near-copies.
+                Keeps the newest fact, deactivates near-copies. Each fact
+                is compared against at most NEAR_DUP_WINDOW recently-kept
+                facts (a sliding window, not the full entity history) —
+                bounds per-tick cost on a large entity without ever fully
+                disabling the pass, so a large entity still keeps making
+                progress instead of getting permanently stuck once it
+                crosses some size threshold.
 
         Both tiers are deterministic and reversible (deactivate, not delete).
         A compaction log is appended to <memory_root>/compaction.log for auditability.
@@ -186,7 +194,20 @@ class Heartbeat:
             # --- Tier 1: near-duplicates (ratio > 0.95) ---
             # Work on what's still active after Tier 0
             remaining = [f for f in active_sorted if f["id"] not in to_deactivate]
-            kept_contents: list[tuple[str, str]] = []  # (content, fact_id)
+
+            # Comparing every fact against every OTHER kept fact is O(n^2)
+            # — one entity with a very large fact list would turn every
+            # heartbeat tick into a quadratic scan. Instead of skipping the
+            # whole pass above a size threshold (which would permanently
+            # disable near-dup compaction for that entity forever, since
+            # nothing else can bring an active-fact count back down),
+            # bound the comparison WINDOW instead: each fact is only
+            # compared against the NEAR_DUP_WINDOW most-recently-kept
+            # facts (remaining is newest-first, so this is a sliding
+            # window over temporally-nearby facts), capping per-fact cost
+            # at a constant regardless of entity size while still making
+            # progress across the entire fact list every tick.
+            kept_contents: deque[tuple[str, str]] = deque(maxlen=NEAR_DUP_WINDOW)
 
             for fact in remaining:
                 content = fact.get("fact", fact.get("content", "")).strip()
@@ -233,6 +254,51 @@ class Heartbeat:
                 f.write("\n".join(log_lines) + "\n")
 
         return stats
+
+    def _is_duplicate_correction(self, suggestion: str, window_hours: float = 4.0) -> bool:
+        """True if `suggestion` looks like a near-repeat of a recent LIGHTHOUSE
+        correction, so reflect() doesn't fill the journal with the same
+        observation written slightly differently every cycle.
+
+        Two independent checks against corrections modified within the last
+        `window_hours`, either firing counts as a duplicate:
+          1. word-overlap between the new suggestion and the candidate's
+             filename slug (filenames are slugified from the prior
+             suggestion's own title, via lighthouse._slug()) — >60% overlap
+          2. the new suggestion appears verbatim in the first 200 chars of
+             the candidate file's content
+
+        Deterministic, no LLM call.
+        """
+        from relay.lighthouse import LIGHTHOUSE_ROOT
+        corrections_dir = LIGHTHOUSE_ROOT / "corrections"
+        if not corrections_dir.exists():
+            return False
+
+        suggestion_words = set(re.findall(r"[a-z]+", suggestion.lower()))
+        if not suggestion_words:
+            return False
+
+        cutoff = time.time() - window_hours * 3600
+        for f in corrections_dir.glob("*.md"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    continue
+
+                filename_words = set(re.findall(r"[a-z]+", f.stem.lower()))
+                if filename_words:
+                    overlap = len(suggestion_words & filename_words) / len(suggestion_words)
+                    if overlap > 0.6:
+                        return True
+
+                content_head = f.read_text(encoding="utf-8")[:200].lower()
+                if suggestion.lower() in content_head:
+                    return True
+            except Exception as e:
+                logger.debug(f"Duplicate-correction check skipped {f}: {e}")
+                continue
+
+        return False
 
     def _parse_reflection_json(self, text: str) -> dict:
         """Extract reflection JSON from model output, tolerating formatting issues.
@@ -337,7 +403,9 @@ Respond with JSON:
         failures = analysis.get('failures', [])
         patterns = analysis.get('patterns', [])
         suggestion = analysis.get('suggestion', '').strip()
-        if suggestion and (failures or patterns):
+        if suggestion and (failures or patterns) and self._is_duplicate_correction(suggestion):
+            logger.debug(f"Heartbeat reflection: skipping near-duplicate correction: '{suggestion[:60]}'")
+        elif suggestion and (failures or patterns):
             try:
                 from relay.lighthouse import write_entry
                 lines = []
