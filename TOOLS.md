@@ -46,6 +46,16 @@ Modify your own system prompt. Versioned and reversible. Must align with L0 cons
 ### `log_experiment(hypothesis, result, status?)`
 Document a behavioral experiment. Track what you tried, what happened, and whether it worked.
 
+### `read_memory_history(entity, at_time)`
+See what was true about an entity as of a past date — not just what's true now. Reconstructs historical state from each fact's validity window, including facts that have since been superseded (`read_memory` only ever shows current active facts).
+
+---
+
+## Skills Tools
+
+### `skill_manage(action, name, ...)`
+Create, patch, or archive your own skills — procedural memory for *how to do things*, distinct from `write_memory`'s factual memory. `action: 'create'` needs `description`, `content`, `triggers` (2-12 phrases), and `tools`; validated against a denylist (shell/code-edit/config/vault/service-restart tools can never be declared) and a hard cap on self-created skills. `action: 'patch'`/`'archive'` only work on skills this tool itself created — hand-authored skills are read-only to it. See `relay/tool_domains/skills_mgmt.py` for the full validation rules, and `skills/learn/SKILL.md` for the workflow that drives it.
+
 ---
 
 ## LIGHTHOUSE Tools
@@ -212,3 +222,10 @@ Restart the agent's systemd service.
 
 ### `send_message_to_owner(text)`
 Send a proactive message to your owner via their primary interface. Used by heartbeat for research findings.
+
+---
+
+## Introspection Tools
+
+### `list_capabilities()`
+See which tools are available on the *current channel*. Untrusted interfaces (e.g. public IRC) get a narrower tool surface regardless of who's asking — check this before attempting something that might be denied. See `relay/capabilities.py`.

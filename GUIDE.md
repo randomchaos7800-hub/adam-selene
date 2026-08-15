@@ -747,13 +747,14 @@ And if you build something better, tell me about it.
 
 ## Appendix B: Tool List
 
-Adam Selene ships with 58 tools across these categories:
+Adam Selene ships with 63 tools across these categories. (Earlier versions of this doc said 58 — that was already stale before the self-learning/bi-temporal-memory pass that added `skill_manage`, `read_memory_history`, and `list_capabilities`: the static tool list had grown to 60 without `write_user_memory` and `read_skill` ever being added to this breakdown. Treat any hardcoded tool count in prose as a snapshot, not a guarantee — `relay.tools.all_tool_definitions()` is the actual source of truth.)
 
-- **Memory (9):** read, search, write, list entities, timeline, tacit knowledge, review conversations, log experiment, update instructions
+- **Memory (11):** read, search, write, list entities, timeline, tacit knowledge, write user profile, review conversations, log experiment, update instructions, read memory history (bi-temporal — "what was true as of date X")
+- **Skills (2):** manage own skills (create/patch/archive procedural memory), read a skill's full workflow
 - **LIGHTHOUSE (4):** write, read, search, living document update
 - **Tasks (3):** read, add, complete
 - **Browser (3):** browse URL (Firecrawl), screenshot URL, browser interact (Playwright)
-- **Web (1):** fetch URL (direct HTTP GET/POST)
+- **Web (1):** fetch URL (direct HTTP GET/POST, SSRF-guarded)
 - **GitHub (6):** create repo, push file, get repo info, list repos, create branch, get file content
 - **IRC (8):** send message, list/update/get active channels, restart bot, search logs, read channel, extract learnings
 - **Research (3):** start investigation, read current investigation, add to agenda
@@ -762,6 +763,7 @@ Adam Selene ships with 58 tools across these categories:
 - **Config (4):** read config, set model, update setting, restart service
 - **Vault (4):** get secret, set secret, store credential, read credential
 - **Messaging (1):** send proactive message to owner
+- **Introspection (1):** list capabilities available on the current channel
 - **Claude Code (1):** sandboxed Claude Code execution
 
 System prompt instruction for tool use: *"A wall is not a stop sign."* If one approach fails, try 2+ other angles before asking for help. Recursive tool loop up to depth 40.

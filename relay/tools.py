@@ -11,7 +11,12 @@ This module defines all tools available to the agent via the Anthropic API.
 Structure:
 1. TOOL_DEFINITIONS: Array of tool schemas for Anthropic API
    - Each tool has: name, description, input_schema (JSON Schema format)
-   - Total: 58 tools
+   - Total: 61 static tools here, plus registry-based tools from
+     relay/tool_domains/ (skill_manage, read_memory_history, ...) — see
+     all_tool_definitions() below and relay/tool_registry.py for why new
+     tool domains register that way instead of joining this list.
+     (63 total as of this writing — check all_tool_definitions() for the
+     current live count rather than trusting this comment to stay current.)
 
 2. execute_tool(): Dispatcher function that routes tool calls to handlers
    - Takes: tool_name, tool_input dict, optional session_store and user_id
