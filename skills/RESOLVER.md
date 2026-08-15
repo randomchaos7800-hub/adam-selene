@@ -39,6 +39,12 @@ This is the dispatcher. Skills are the implementation. **Read the skill file bef
 | Edit own code, write files, git commit, GitHub operations | `skills/code-ops/SKILL.md` |
 | Change model, update settings, restart service, read config | `skills/config-ops/SKILL.md` |
 
+## Self-learning
+
+| Trigger | Skill |
+|---------|-------|
+| "Learn this", "save this as a skill", after a corrected mistake or non-obvious multi-step fix | `skills/learn/SKILL.md` |
+
 ## Disambiguation rules
 
 When multiple skills could match:
