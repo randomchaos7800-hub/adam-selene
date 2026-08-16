@@ -160,9 +160,11 @@ Extract interesting facts or insights from IRC conversations.
 ## Shell Tool
 
 ### `run_shell(command, timeout?, cwd?)`
-Execute a shell command. Returns stdout + stderr + exit code.
+Execute a shell command, sandboxed via bubblewrap. Returns stdout + stderr + exit code.
 
-**Security blocklist** (hard-blocked patterns):
+**Sandbox** (the real boundary — see `relay/shell_tool.py` / `ARCHITECTURE.md`): host filesystem read-only except the project and memory directories (read-write); common credential locations and this framework's own `config/secrets.env` explicitly masked even within a writable bind; environment cleared to a small non-secret allowlist; process/namespace isolated. Fails closed (refuses to run) if bubblewrap isn't installed, rather than silently running unsandboxed — Linux-only, see README's Requirements section for the non-Linux opt-out.
+
+**Regex blocklist** (first-pass filter only, not the security boundary):
 - Mass delete (`rm -rf /`)
 - Device writes (`dd of=/dev/`)
 - Vault access

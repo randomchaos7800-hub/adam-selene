@@ -58,6 +58,11 @@
         "max_self_created": 15
     },
 
+    "_comment_shell": "run_shell is sandboxed via bubblewrap (bwrap) — see relay/shell_tool.py. require_sandbox=true (default) fails closed if bwrap isn't installed rather than running unsandboxed. Only set false as a deliberate, understood opt-out for local dev on a non-Linux machine — bubblewrap is Linux-only.",
+    "shell": {
+        "require_sandbox": true
+    },
+
     "interfaces": {
         "telegram": false,
         "slack": false,
