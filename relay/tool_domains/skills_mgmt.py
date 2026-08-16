@@ -70,6 +70,39 @@ MAX_CONTENT_LEN = 12000
 MIN_TRIGGERS = 2
 MAX_TRIGGERS = 12
 
+# Content-poisoning defense: patterns associated with a documented attack
+# class (context poisoning via persistence markers) — adversarial content
+# specifically crafted with fake SYSTEM/ADMIN/PRIORITY prefixes, urgency
+# language, and explicit persistence/priority directives so it survives
+# and escalates past normal scrutiny once it's saved somewhere that gets
+# re-read and re-injected across turns. A self-created skill IS exactly
+# that kind of persistent, re-injected content — legitimate skill content
+# has no reason to claim special system authority or declare itself
+# un-removable, so this is a narrow, low-false-positive screen, not a
+# restriction on ordinary instructional writing. Same caveat as the rest
+# of this framework's keyword-based guardrails (l0_validator.py): a
+# defense-in-depth heuristic, not comprehensive — paraphrase or
+# non-English phrasing isn't caught by pattern matching.
+_PERSISTENCE_MARKER_PATTERNS = [
+    re.compile(r"\b(SYSTEM|ADMIN|ROOT|PRIORITY)\s*[:=]", re.IGNORECASE),
+    re.compile(r"\bmust\s+(survive|persist)\b", re.IGNORECASE),
+    re.compile(r"\bnever\s+(forget|delete|remove)\s+this\b", re.IGNORECASE),
+    re.compile(r"\bignore\s+(previous|prior|all\s+other)\s+instructions\b", re.IGNORECASE),
+    re.compile(r"\btakes?\s+priority\s+over\s+(everything|all|other)", re.IGNORECASE),
+    re.compile(r"\bcannot\s+be\s+(removed|deleted|archived|overridden)\b", re.IGNORECASE),
+    re.compile(r"\bdo\s+not\s+(delete|remove|archive)\s+this\s+skill\b", re.IGNORECASE),
+]
+
+
+def _find_persistence_markers(text: str) -> list[str]:
+    """Return the suspicious persistence/authority-claim phrases found, if any."""
+    matched = []
+    for pattern in _PERSISTENCE_MARKER_PATTERNS:
+        m = pattern.search(text or "")
+        if m:
+            matched.append(m.group())
+    return matched
+
 
 def _max_self_created() -> int:
     settings = config.load_settings()
@@ -163,6 +196,14 @@ def _validate_create(name: str, description: str, content: str, triggers: list, 
         unknown = [t for t in tools if t not in TOOL_DENYLIST and t not in _known_tool_names()]
         if unknown:
             errors.append(f"unknown tool name(s): {unknown}")
+
+    markers = _find_persistence_markers(content) + _find_persistence_markers(description)
+    if markers:
+        errors.append(
+            f"content contains suspicious persistence/authority-claim phrasing ({markers}) — "
+            f"a skill shouldn't claim special system authority or declare itself un-removable; "
+            f"rewrite as an ordinary procedure without that framing"
+        )
 
     if len(_self_created_skills()) >= _max_self_created():
         errors.append(
@@ -258,6 +299,13 @@ def _patch(name: str, old_str: str, new_str: str) -> str:
         return (
             f"Cannot patch '{name}' — it wasn't created by this tool. "
             f"Only self-created skills (with a created_by field) can be patched here."
+        )
+
+    markers = _find_persistence_markers(new_str)
+    if markers:
+        return (
+            f"Cannot patch: new_str contains suspicious persistence/authority-claim "
+            f"phrasing ({markers}) — rewrite without that framing."
         )
 
     skill_path = SKILLS_DIR / name / "SKILL.md"
