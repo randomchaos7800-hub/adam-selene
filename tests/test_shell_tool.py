@@ -38,7 +38,12 @@ class TestRequireSandboxSetting(unittest.TestCase):
 
 class TestFailClosedWithoutBwrap(unittest.TestCase):
     def test_refuses_to_run_unsandboxed_by_default(self):
+        # Mock load_settings explicitly rather than relying on whatever a
+        # real settings.json on the machine running this test happens to
+        # contain — require_sandbox defaults to True, but a real deployment
+        # config could set it False and silently make this test meaningless.
         with patch.object(shell_tool, "BWRAP_BIN", None), \
+             patch("relay.shell_tool.config.load_settings", return_value={}), \
              patch("subprocess.run") as mock_run:
             result = shell_tool.run_shell("echo hi")
         self.assertIn("bubblewrap", result.lower())
@@ -146,6 +151,38 @@ class TestBwrapArgvConstruction(unittest.TestCase):
         argv = self._run_and_capture_argv()
         for flag in ("--unshare-pid", "--unshare-uts", "--unshare-ipc", "--new-session", "--die-with-parent"):
             self.assertIn(flag, argv)
+
+    def test_proc_remounted_for_pid_namespace(self):
+        # --unshare-pid alone leaves /proc as whatever --ro-bind / /
+        # already bound — the HOST's procfs, reflecting the wrong PID
+        # namespace. Verified directly (outside this mocked test) that
+        # without --proc /proc, /proc/self resolves to a different PID
+        # than the sandboxed process's own — a real, silent correctness
+        # bug for any command doing /proc introspection, not just a
+        # theoretical concern.
+        argv = self._run_and_capture_argv()
+        self.assertIn("--proc", argv)
+        idx = argv.index("--proc")
+        self.assertEqual(argv[idx + 1], "/proc")
+
+    def test_build_sandbox_prefix_supports_extra_ro_binds(self):
+        from relay.shell_tool import build_sandbox_prefix
+        extra = Path(self.tempdir.name) / "extra-secret-dir"
+        extra.mkdir()
+        prefix = build_sandbox_prefix(self.project_root, extra_ro_binds=[extra])
+        idx = prefix.index(str(extra))
+        self.assertEqual(prefix[idx - 1], "--ro-bind")
+
+    def test_build_sandbox_prefix_supports_extra_env_passthrough(self):
+        from relay.shell_tool import build_sandbox_prefix
+        with patch.dict("os.environ", {"SOME_TOOL_SPECIFIC_VAR": "value"}):
+            prefix = build_sandbox_prefix(self.project_root, extra_env_passthrough=["SOME_TOOL_SPECIFIC_VAR"])
+        self.assertIn("SOME_TOOL_SPECIFIC_VAR", prefix)
+
+    def test_build_sandbox_prefix_returns_none_without_bwrap(self):
+        from relay.shell_tool import build_sandbox_prefix
+        with patch.object(shell_tool, "BWRAP_BIN", None):
+            self.assertIsNone(build_sandbox_prefix(self.project_root))
 
     def test_secret_mask_paths_included_when_present(self):
         fake_ssh = Path(self.tempdir.name) / "fake-home" / ".ssh"

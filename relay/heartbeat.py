@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from relay import config
+from relay.fs_utils import read_json_file, write_json_file
 from relay.snapshots import SnapshotManager
 from relay.switchboard import Switchboard
 from relay.sessions import SessionStore
@@ -601,22 +602,32 @@ Write a concise synthesis (3-5 paragraphs) answering the original goal. What did
         except Exception as e:
             logger.error(f"Thread LIGHTHOUSE write failed: {e}")
 
-    async def _push_thread_to_owner(self, thread, synthesis: str) -> None:
+    async def _send_proactive_push(self, message: str, log_prefix: str, success_detail: str = "") -> bool:
+        """Shared push-to-owner plumbing for heartbeat's proactive nudges
+        (research pulse thread results, relationship pulse check-ins) —
+        same rate-limit check, send, and mark_initiation_sent bookkeeping
+        either way; only the message text and log framing differ."""
         from relay.telegram_sender import _send_telegram_message, can_send_message, mark_initiation_sent
         can_send, reason = can_send_message()
         if not can_send:
-            logger.info(f"Research pulse: push rate-limited — {reason}")
-            return
+            logger.info(f"{log_prefix}: push rate-limited — {reason}")
+            return False
+        result = await _send_telegram_message(message)
+        if result.get("success"):
+            mark_initiation_sent()
+            logger.info(f"{log_prefix}: pushed{success_detail}")
+            return True
+        logger.warning(f"{log_prefix}: push failed — {result.get('error')}")
+        return False
+
+    async def _push_thread_to_owner(self, thread, synthesis: str) -> None:
         snippet = synthesis[:500].strip()
         if len(synthesis) > 500:
             snippet += "…"
         message = f"📡 *Finished investigating:* {thread.title}\n_{thread.cycle_count} research cycles_\n\n{snippet}\n\n_(full thread in LIGHTHOUSE — want to dig in?)_"
-        result = await _send_telegram_message(message)
-        if result.get("success"):
-            mark_initiation_sent()
-            logger.info(f"Research pulse: pushed thread result to {config.owner_name()}")
-        else:
-            logger.warning(f"Research pulse: push failed — {result.get('error')}")
+        await self._send_proactive_push(
+            message, "Research pulse", f" thread result to {config.owner_name()}"
+        )
 
     async def _generate_self_question(self) -> dict | None:
         """The agent generates its own research question based on recent context."""
@@ -786,18 +797,20 @@ Return ONLY a single integer 1-5."""
         return config.memory_root() / "relationship_pulse_state.json"
 
     def _load_relationship_pulse_state(self) -> dict:
-        path = self._relationship_pulse_state_path()
-        if not path.exists():
-            return {"last_run_date": None, "last_flagged": {}}
+        default = {"last_run_date": None, "last_flagged": {}}
         try:
-            return json.loads(path.read_text())
+            return read_json_file(self._relationship_pulse_state_path(), default)
         except Exception as e:
             logger.debug(f"Relationship pulse state load failed, starting fresh: {e}")
-            return {"last_run_date": None, "last_flagged": {}}
+            return default
 
     def _save_relationship_pulse_state(self, state: dict) -> None:
+        # Locked + atomic, same relay.fs_utils primitives used everywhere
+        # else in this codebase for concurrent-safe state files — a plain
+        # write_text() here would risk corrupting cooldown state if a
+        # write raced a concurrent heartbeat tick or crashed mid-write.
         try:
-            self._relationship_pulse_state_path().write_text(json.dumps(state, indent=2))
+            write_json_file(self._relationship_pulse_state_path(), state)
         except Exception as e:
             logger.warning(f"Relationship pulse state save failed (non-fatal): {e}")
 
@@ -817,16 +830,21 @@ Return ONLY a single integer 1-5."""
 
         for entity in storage.list_entities_by_category("people"):
             name = entity["name"]
-            entity_data = storage.read_entity(name)
-            if not entity_data or not entity_data.get("recent_facts"):
+            recent_facts = storage.read_recent_facts(name)
+            if not recent_facts:
                 continue
 
             timestamps = []
-            for f in entity_data["recent_facts"]:
+            for f in recent_facts:
                 ts = f.get("timestamp", f.get("extracted", ""))
                 if ts:
+                    # Mixed naive/aware timestamps across facts (e.g. an
+                    # older fact written before timezone-aware timestamps
+                    # were used) would otherwise raise TypeError out of
+                    # max()/subtraction below — normalize each to naive
+                    # local, same as storage.py's own bi-temporal logic.
                     try:
-                        timestamps.append(datetime.fromisoformat(ts))
+                        timestamps.append(storage._to_naive_local(datetime.fromisoformat(ts)))
                     except ValueError:
                         continue
             if not timestamps:
@@ -839,7 +857,8 @@ Return ONLY a single integer 1-5."""
             flagged_at = last_flagged.get(name)
             if flagged_at:
                 try:
-                    if (now - datetime.fromisoformat(flagged_at)).days < cooldown:
+                    flagged_dt = storage._to_naive_local(datetime.fromisoformat(flagged_at))
+                    if (now - flagged_dt).days < cooldown:
                         continue
                 except ValueError:
                     pass
@@ -896,15 +915,5 @@ Return ONLY a single integer 1-5."""
         return {"stale_entity": name, "days_stale": days_stale}
 
     async def _push_stale_relationship(self, name: str, display_name: str, days_stale: int) -> None:
-        from relay.telegram_sender import _send_telegram_message, can_send_message, mark_initiation_sent
-        can_send, reason = can_send_message()
-        if not can_send:
-            logger.info(f"Relationship pulse: push rate-limited — {reason}")
-            return
         message = f"👋 Haven't heard anything about *{display_name}* in {days_stale} days — anything new there?"
-        result = await _send_telegram_message(message)
-        if result.get("success"):
-            mark_initiation_sent()
-            logger.info(f"Relationship pulse: pushed nudge about {name}")
-        else:
-            logger.warning(f"Relationship pulse: push failed — {result.get('error')}")
+        await self._send_proactive_push(message, "Relationship pulse", f" nudge about {name}")

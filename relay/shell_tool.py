@@ -164,7 +164,31 @@ def _resolve_chdir(work_dir: Path, project_root: Path, memory_root: Path, home: 
     return resolved if preserved else project_root
 
 
-def _build_bwrap_argv(command: str, work_dir: Path) -> list[str]:
+def build_sandbox_prefix(
+    work_dir: Path,
+    extra_ro_binds: list[Path] | None = None,
+    extra_env_passthrough: list[str] | None = None,
+) -> list[str] | None:
+    """Build the bwrap argv PREFIX (everything up to but not including the
+    actual command to execute) — the same sandboxing run_shell uses,
+    exposed so other tools that spawn subprocesses can reuse it instead of
+    each growing their own copy. Returns None if bwrap isn't installed.
+
+    extra_ro_binds: additional paths to restore read-only on top of the
+    blanked $HOME (e.g. a CLI's own auth/config dir that it legitimately
+    needs to function — see relay/claude_code_tool.py, which needs
+    ~/.claude.json and ~/.claude/ readable for the `claude` binary to
+    authenticate).
+    extra_env_passthrough: additional env var names to allow through
+    _ENV_ALLOWLIST, for the same reason (e.g. ANTHROPIC_API_KEY).
+
+    Caller is responsible for appending the actual command/argv after this
+    prefix — see run_shell's `/bin/sh -c command` for the shell-string
+    case, or relay/claude_code_tool.py for the direct-argv case.
+    """
+    if not BWRAP_BIN:
+        return None
+
     project_root = config.project_root().resolve()
     memory_root = config.memory_root().resolve()
     home = Path.home().resolve()
@@ -186,6 +210,9 @@ def _build_bwrap_argv(command: str, work_dir: Path) -> list[str]:
     ]
     if memory_root != project_root and not str(memory_root).startswith(str(project_root) + os.sep):
         argv += ["--bind", str(memory_root), str(memory_root)]
+    for path in (extra_ro_binds or []):
+        if path.exists():
+            argv += ["--ro-bind", str(path), str(path)]
 
     secrets_env = project_root / "config" / "secrets.env"
     if secrets_env.exists():
@@ -195,17 +222,33 @@ def _build_bwrap_argv(command: str, work_dir: Path) -> list[str]:
             argv += ["--ro-bind", "/dev/null", str(path)]
 
     argv += ["--clearenv"]
-    for var in _ENV_ALLOWLIST:
+    for var in _ENV_ALLOWLIST + (extra_env_passthrough or []):
         if var in os.environ:
             argv += ["--setenv", var, os.environ[var]]
 
     argv += [
         "--unshare-pid", "--unshare-uts", "--unshare-ipc",
+        # --unshare-pid puts the sandboxed process in a NEW PID namespace,
+        # but without --proc, /proc is still whatever --ro-bind / / bound
+        # in — the HOST's procfs, which reflects the OLD (parent)
+        # namespace's PIDs. Verified directly: without this, /proc/self
+        # resolves to a different PID than the process's own — any
+        # command that reads /proc/self (which is more common than it
+        # sounds — was caught here because Bun, the claude CLI's runtime,
+        # aborts outright on the mismatch, but plenty of other tools do
+        # PID-based /proc introspection more quietly and would just get
+        # wrong answers instead of crashing) needs a procfs that actually
+        # matches its own namespace.
+        "--proc", "/proc",
         "--new-session", "--die-with-parent",
         "--chdir", str(chdir_target),
-        "/bin/sh", "-c", command,
     ]
     return argv
+
+
+def _build_bwrap_argv(command: str, work_dir: Path) -> list[str]:
+    prefix = build_sandbox_prefix(work_dir)
+    return prefix + ["/bin/sh", "-c", command]
 
 
 def run_shell(command: str, cwd: str = None, timeout: int = DEFAULT_TIMEOUT) -> str:

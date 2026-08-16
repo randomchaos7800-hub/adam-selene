@@ -261,6 +261,40 @@ def read_entity(name: str) -> Optional[dict]:
     }
 
 
+def read_recent_facts(name: str) -> Optional[list[dict]]:
+    """Same active/recent-facts selection as read_entity(), without also
+    reading summary.md — for callers (e.g. heartbeat's relationship pulse)
+    that only need timestamps and don't use the prose summary at all."""
+    entities = load_entities()
+    name_lower = name.lower().replace(" ", "_")
+
+    if name_lower in entities:
+        entity_data = entities[name_lower]
+    else:
+        resolved = resolve_entity(name)
+        if not resolved:
+            return None
+        name_lower = resolved
+        entity_data = entities[name_lower]
+
+    entity_dir = get_memory_path() / entity_data["path"]
+    facts_file = entity_dir / "facts.json"
+    if not facts_file.exists():
+        return []
+
+    facts_data = json.loads(facts_file.read_text())
+    all_facts = facts_data.get("facts", [])
+    active_facts = [
+        f for f in all_facts
+        if f.get("active", True) and f.get("status", "active") == "active"
+    ]
+    return sorted(
+        active_facts,
+        key=lambda f: f.get("timestamp", f.get("extracted", "")),
+        reverse=True
+    )[:10]
+
+
 # --- Fact operations ---
 
 # Trust tier a fact's origin falls into — a defense against a hostile or
@@ -314,15 +348,23 @@ DEFAULT_AUTHORITY = "standard"
 
 def _derive_default_authority(category: str, provenance: str) -> str:
     """Authority isn't independently specified by most callers — it's
-    derived from provenance + category, matching the paper's own approach
-    of predicting authority at write time rather than leaving it
-    unspecified until some later point decides to trust the content."""
+    derived from provenance, matching the paper's own approach of
+    predicting authority at write time rather than leaving it unspecified
+    until some later point decides to trust the content.
+
+    category is intentionally NOT used to auto-elevate to "high" here.
+    "constraint" in this codebase's fact taxonomy (config/extraction.md)
+    means an ordinary world-fact ("Surgery costs $X", "Deadline is
+    Friday"), not a behavioral directive to the agent — conflating the
+    two would let any owner-stated world-fact silently acquire the power
+    to justify enforcing a behavioral constraint. "high" is reserved for
+    callers who set it explicitly, with a real basis for treating it as
+    an unambiguous directive.
+    """
     if provenance == "tool_derived":
         # Untrusted external content never gets elevated authority by
         # default, regardless of what category it landed in.
         return "low"
-    if category == "constraint" and provenance == "owner_stated":
-        return "high"
     return "standard"
 
 

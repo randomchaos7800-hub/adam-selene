@@ -122,18 +122,25 @@ class TestFactAuthority(unittest.TestCase):
         fact = storage.read_entity("alice")["recent_facts"][0]
         self.assertEqual(fact["authority"], "low")
 
-    def test_owner_stated_constraint_gets_high_authority(self):
-        storage.add_fact("alice", "constraint", "never do X without asking", provenance="owner_stated")
+    def test_owner_stated_constraint_does_not_auto_elevate_to_high(self):
+        # "constraint" in this codebase's taxonomy means an ordinary
+        # world-fact ("Surgery costs $X", "Deadline is Friday"), not a
+        # behavioral directive to the agent — category alone must never
+        # grant "high" authority, even for owner_stated provenance.
+        storage.add_fact("alice", "constraint", "surgery costs $4000", provenance="owner_stated")
         fact = storage.read_entity("alice")["recent_facts"][0]
-        self.assertEqual(fact["authority"], "high")
+        self.assertEqual(fact["authority"], "standard")
 
     def test_agent_inferred_constraint_does_not_get_high_authority(self):
-        # High authority is reserved for owner_stated + constraint
-        # specifically — an agent's own inference, even about a
-        # constraint-shaped fact, shouldn't auto-escalate to "directive".
         storage.add_fact("alice", "constraint", "seems to want X always", provenance="agent_inferred")
         fact = storage.read_entity("alice")["recent_facts"][0]
         self.assertEqual(fact["authority"], "standard")
+
+    def test_explicit_high_authority_override_is_respected(self):
+        # "high" is reachable — just never auto-derived from category.
+        storage.add_fact("alice", "constraint", "never do X without asking", authority="high")
+        fact = storage.read_entity("alice")["recent_facts"][0]
+        self.assertEqual(fact["authority"], "high")
 
     def test_explicit_authority_override_is_respected(self):
         storage.add_fact("alice", "status", "some fact", authority="low")
@@ -154,6 +161,55 @@ class TestFactAuthority(unittest.TestCase):
 
     def test_is_actionable_authority_defaults_true_for_legacy_facts_without_the_field(self):
         self.assertTrue(storage.is_actionable_authority({"fact": "old fact, no authority field"}))
+
+
+class TestReadRecentFacts(unittest.TestCase):
+    """read_recent_facts() is read_entity()'s facts-only sibling — same
+    active/recent selection, without the summary.md read a caller that
+    only needs timestamps (e.g. heartbeat's relationship pulse) doesn't
+    use."""
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.get_path_patcher = patch("memory.storage.get_memory_path", return_value=self.root)
+        self.get_path_patcher.start()
+        self.addCleanup(self.get_path_patcher.stop)
+        self.addCleanup(self.tempdir.cleanup)
+
+        entity_dir = self.root / "life" / "areas" / "people" / "alice"
+        entity_dir.mkdir(parents=True, exist_ok=True)
+        (self.root / "entities.json").write_text(json.dumps({
+            "alice": {"category": "people", "aliases": ["al"], "path": "life/areas/people/alice"}
+        }))
+        (entity_dir / "facts.json").write_text(json.dumps({"entity": "alice", "category": "people", "facts": []}))
+
+    def test_matches_read_entity_recent_facts(self):
+        storage.add_fact("alice", "preference", "prefers tea")
+        storage.add_fact("alice", "status", "moved to Chicago")
+        self.assertEqual(
+            storage.read_recent_facts("alice"),
+            storage.read_entity("alice")["recent_facts"],
+        )
+
+    def test_resolves_via_alias(self):
+        storage.add_fact("alice", "preference", "prefers tea")
+        self.assertEqual(storage.read_recent_facts("al"), storage.read_recent_facts("alice"))
+
+    def test_unknown_entity_returns_none(self):
+        self.assertIsNone(storage.read_recent_facts("nobody"))
+
+    def test_no_facts_file_returns_empty_list(self):
+        (self.root / "life" / "areas" / "people" / "alice" / "facts.json").unlink()
+        self.assertEqual(storage.read_recent_facts("alice"), [])
+
+    def test_does_not_read_summary_file(self):
+        # summary.md is never even created in this test's fixture — if
+        # read_recent_facts touched it, this would raise instead of
+        # silently returning an empty-facts result.
+        storage.add_fact("alice", "preference", "prefers tea")
+        self.assertFalse((self.root / "life" / "areas" / "people" / "alice" / "summary.md").exists())
+        self.assertEqual(len(storage.read_recent_facts("alice")), 1)
 
 
 class TestBiTemporalFacts(unittest.TestCase):

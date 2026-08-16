@@ -3,6 +3,37 @@ Claude Code tool for the agent.
 
 Spawns a Claude Code subprocess in the sandbox and returns its output.
 The agent can use this to request code, tools, or analysis from Claude Code.
+
+NOT bwrap-sandboxed, unlike relay/shell_tool.py's run_shell — investigated
+and deliberately not shipped, not an oversight. This tool runs Claude Code
+with --dangerouslySkipPermissions, which carries the same unsandboxed-
+host-access risk run_shell used to carry before its bwrap boundary, and
+that gap is real: only the `subdir` path-traversal fix below applies here.
+
+Why no sandbox: the `claude` binary (a Bun-compiled executable) reliably
+crashes (Bun's own runtime panic/abort, not an error this tool can catch
+or work around) when run under bubblewrap with more than two extra mount
+operations beyond a plain `--ro-bind / /`. Confirmed directly, not
+theorized — bisected flag-by-flag:
+  - A bare `--ro-bind / /` alone crashes it.
+  - `--tmpfs $HOME` + exactly two `--ro-bind` restores (for Claude Code's
+    own auth: ~/.claude.json and ~/.claude/, which it needs to function
+    at all) does NOT crash.
+  - Adding a THIRD mount beyond those two — regardless of type
+    (--ro-bind, --bind, --dev-bind) or target (even an empty scratch
+    directory outside $HOME entirely) — crashes it again, every time.
+  - Namespace unshares (--unshare-pid/-uts/-ipc), --proc, --new-session,
+    and --die-with-parent were each ruled out individually; none of them
+    triggers it on their own.
+This narrows to a genuine Bun-runtime/bwrap mount-count interaction,
+not anything specific to this framework's sandbox design — and there's
+no configuration that both closes the security gap (which needs at least
+project_root writable, on top of the two auth-path restores — three
+mounts) and keeps the binary from crashing. Shipping a "hardened" version
+of this tool that fails 100% of the time would be strictly worse than
+leaving it unsandboxed and documented as such. If bwrap or Bun changes
+this behavior in a future version, revisit — relay/shell_tool.py's
+build_sandbox_prefix() is written to be reusable for exactly this.
 """
 
 import subprocess
