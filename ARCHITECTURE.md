@@ -81,7 +81,7 @@ Categories:
 
 Beyond the hand-authored skills in `skills/`, the agent can author its own procedural memory at runtime:
 
-- **`skill_manage`** (`relay/tool_domains/skills_mgmt.py`) — `create`/`patch`/`archive` actions. `create` validates name format, description/content length, 2-12 triggers (rejects generic, too-short, or already-claimed-elsewhere triggers — routing is substring match, so a bad trigger degrades every message, not just this skill), and declared tools against a denylist (shell/code-edit/config/vault/service-restart tools can never be self-granted). A hard cap on self-created skills (`skills.max_self_created` in settings, default 15) is enforced before every create. `patch`/`archive` only ever touch skills this tool itself created (tracked via a `created_by` frontmatter field) — hand-authored skills are read-only to it. `archive` moves to `skills/.archive/`, never deletes.
+- **`skill_manage`** (`relay/tool_domains/skills_mgmt.py`) — `create`/`patch`/`archive` actions. `create` validates name format, description/content length, 2-12 triggers (rejects generic, too-short, or already-claimed-elsewhere triggers — routing is substring match, so a bad trigger degrades every message, not just this skill), and declared tools against a denylist (shell/code-edit/config/vault/service-restart tools can never be self-granted). Content is also screened for suspicious persistence/authority-claim phrasing (`_find_persistence_markers()`) — a fake `SYSTEM:`/`ADMIN:` prefix, "must survive", "cannot be removed", "ignore previous instructions" — the same content-poisoning pattern a newly-documented attack class targets specifically toward content designed to persist and get re-injected across turns, which a self-created skill file inherently is; `patch` gets the same screen on `new_str`. A hard cap on self-created skills (`skills.max_self_created` in settings, default 15) is enforced before every create. `patch`/`archive` only ever touch skills this tool itself created (tracked via a `created_by` frontmatter field) — hand-authored skills are read-only to it. `archive` moves to `skills/.archive/`, never deletes.
 - **Standing nudge** (`relay/skill_resolver.py`'s `SELF_LEARNING_COMPACT`) — a fixed, always-appended prompt block reminding the agent `skill_manage` exists, so self-learning isn't purely reactive to being asked.
 - **Usage telemetry** (`relay/skill_resolver.py`'s `_bump_usage()`) — best-effort sidecar (`skills/.usage.json`, gitignored) tracking `use_count`/`last_used` per non-always-on skill every time it's routed to.
 - **Nightly curator** (`scripts/skill_curator.py`) — deterministic, no LLM call, imports nothing from the app package (runs independent of whether the main service is even up). `active → stale` after 30 days unused, `stale → archived` after 90 (both configurable via CLI flags). A skill with `pinned: true` is exempt. `--restart-service-on-change` is opt-in — the running process caches `manifest.json` in memory, so an external archive needs a restart to take effect, but auto-restarting a production agent from cron isn't a safe default.
@@ -157,6 +157,7 @@ Two-phase idle reflection:
 - **Phase 1 (15 min idle):** Reflect on recent conversation → log observations to LIGHTHOUSE
 - **Phase 2 (30+ min idle):** Research an agenda item → push to owner if quality score ≥ 4/5
 - Rate limited: max 1 proactive push per 4 hours
+- **Phase 3 (once per calendar day, not idle-gated):** relationship pulse — notices a `people`-category entity with no new facts in `relationship_pulse.stale_after_days` (default 21), logs a LIGHTHOUSE `patterns` entry, and — same rate-limited push mechanism as Phase 2 — surfaces a gentle nudge. Won't re-flag the same person more often than `cooldown_days` (default 14). Inspired by Inflection AI's Pi Journeys (memory that "grows with you," built around specific relationships, proactively resurfacing them) — adapted as an extension of this framework's own existing idle-reflection frame, not an attempt to reproduce Pi's (largely undisclosed) actual architecture. Disable via `relationship_pulse.enabled: false`.
 - Tier 0/1 memory compaction (exact + near-duplicate dedup, `SequenceMatcher` ratio > 0.95) runs every tick before reflection. The near-dup pass is O(n²); capped at 200 active facts per entity — an entity past the cap skips just that pass (logged), Tier 0 exact-dup dedup still runs and applies regardless.
 
 ### Working Memory (working_memory.py)
@@ -225,9 +226,20 @@ Secrets are stored in an age-encrypted vault (`~/.vault/secrets.age`). The agent
 
 `log_tool_call` redacts sensitive fields (`value`, `data`, `credentials`, `api_key`, `token`, `secret`, `password`) for vault and credential tools. The JSONL audit trail records `[REDACTED]` instead of actual secret values.
 
-### Shell Blocklist
+### Shell Sandbox (shell_tool.py)
 
-`shell_tool.py` enforces a regex blocklist on all shell commands before execution. Blocked categories:
+`run_shell` executes inside a **bubblewrap (bwrap)** sandbox — OS-level isolation, not just pattern matching. The regex blocklist below still runs first (cheap, catches the lazy cases before a subprocess even spawns), but it was never a real security boundary on its own — `rm -fr` vs `rm -rf`, `find . -delete`, or any tool that doesn't route through this blocklist at all trivially gets past pattern matching. The sandbox is the actual control:
+
+- **`--ro-bind / /`** — the whole host filesystem is read-only. The agent can still read/execute anything on the system, but can't tamper with it.
+- **`--tmpfs $HOME` + restore project_root/memory_root read-write** — home is blanked, then only the agent's own project and memory directories are bound back writable. This is an **allowlist** of what's writable, not a denylist of what's hidden — a denylist approach (hide known-secret paths, leave everything else visible) was tried first in a sibling deployment of this framework and an adversarial review found it missed `~/.netrc`, `~/.config/rclone`, other credential files, and browser profiles. Don't repeat that mistake if you extend this.
+- **Explicit secret-path masks** (`--ro-bind /dev/null <path>`) — `config/secrets.env` (this framework's own live API keys/tokens) and common credential locations (`~/.ssh`, `~/.aws`, `~/.netrc`, `~/.gnupg`, `~/.docker`, `~/.npmrc`, `~/.pypirc`, `~/.config/gh`, `~/.vault`, ...) stay unreadable even though they'd otherwise fall under a broader bind.
+- **`--clearenv` + a small allowlist** (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `TERM`, `SHELL`) — dotenv-loaded secrets (`OPENROUTER_API_KEY`, `TELEGRAM_BOT_TOKEN`, ...) live in `os.environ` by the time `run_shell` executes; bwrap inherits the parent environment by default unless cleared, so without this, `echo $SOME_KEY` or reading `/proc/self/environ` inside the sandbox would leak everything regardless of file-level masking.
+- **`--tmpfs /tmp`** — private, isolated scratch space, wiped on exit.
+- **Namespace unshares** (`--unshare-pid --unshare-uts --unshare-ipc --new-session --die-with-parent`) — blocks TIOCSTI terminal injection, no orphaned processes, nothing outlives the parent.
+
+**Fails closed if bubblewrap isn't installed** — refuses to execute rather than silently falling back to unsandboxed `shell=True`. This is deliberate: a sibling deployment's first sandbox attempt *did* fall back silently on a missing dependency, and that was itself found and fixed as a real vulnerability. `settings.json`'s `shell.require_sandbox` (default `true`) is the explicit, logged opt-out for a non-Linux dev environment — bubblewrap is Linux-only, so without an opt-out `run_shell` is simply unavailable on macOS.
+
+Regex blocklist categories (first-pass filter only):
 - Destructive ops (`rm -rf`, `dd`, `mkfs`)
 - Critical service disruption (`systemctl stop nginx`, `kill 1`)
 - Vault/secret access (`.vault`, `vault.sh`, `secrets.age`)
@@ -266,7 +278,10 @@ Runs on outbound text, outside the model's own reasoning — scans for file-crea
 
 ### Remaining Gaps
 
-- **Shell blocklist is regex-based.** Sufficiently creative encoding can bypass pattern matching. The blocklist is defense-in-depth, not a security boundary.
+- **Shell regex blocklist is still just a first-pass filter** — real encoding can bypass pattern matching, same as before. The bubblewrap sandbox is the actual boundary now (see Shell Sandbox above), not the regex.
+- **Bubblewrap is Linux-only.** `run_shell` fails closed (refuses to run) on macOS/other platforms without bwrap unless `shell.require_sandbox` is explicitly set to `false` — a real, deliberate capability loss on non-Linux dev machines, not an oversight.
+- **The secret-mask path list (`_SECRET_MASK_PATHS` in shell_tool.py) is common-sense defaults, not exhaustive.** A credential file in an unlisted location is still readable inside the sandbox if it falls under project_root/memory_root's read-write bind. Extend the list for your own deployment's actual secret locations.
+- **`/tmp` is a real, fully-writable tmpfs for the duration of the call** — anything written there doesn't touch host state and is wiped on exit, but it means a command can freely create files anywhere under `/tmp` (not just where the caller's cwd happens to be), which is expected tmpfs behavior, not a boundary violation.
 - **Self-modification autonomy is a real anti-pattern to watch for, not just a hypothetical.** The `write_my_code`/`edit_my_code`/`git_commit` tools here are gated behind owner identity, the L0 tool-call screen above, and require the model to actively choose to call them mid-conversation — there's no standing background loop doing this today, and that's deliberate. A self-modification *loop* built on an earlier version of this framework was found to have produced hundreds of no-op commits and progressively corrupted its own docstrings over time, with a revert-on-failure path that didn't actually work and a whitelist bug that let it widen its own scope. It was shut off. If you build an autonomous self-mod loop on top of this framework, put a human-reviewed diff step in front of it before it commits anything — don't let an LLM-authored diff to its own source land with no gate at all.
 
 ## Configuration

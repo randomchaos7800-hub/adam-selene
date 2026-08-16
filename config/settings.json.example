@@ -58,6 +58,18 @@
         "max_self_created": 15
     },
 
+    "_comment_shell": "run_shell is sandboxed via bubblewrap (bwrap) — see relay/shell_tool.py. require_sandbox=true (default) fails closed if bwrap isn't installed rather than running unsandboxed. Only set false as a deliberate, understood opt-out for local dev on a non-Linux machine — bubblewrap is Linux-only.",
+    "shell": {
+        "require_sandbox": true
+    },
+
+    "_comment_relationship_pulse": "Heartbeat Phase 3 — once/calendar-day, notices a 'people' entity that's gone quiet and surfaces a gentle nudge (rate-limited, same mechanism as research_pulse's proactive push). See relay/heartbeat.py.",
+    "relationship_pulse": {
+        "enabled": true,
+        "stale_after_days": 21,
+        "cooldown_days": 14
+    },
+
     "interfaces": {
         "telegram": false,
         "slack": false,

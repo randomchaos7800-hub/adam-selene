@@ -8,6 +8,7 @@
     "timestamp": "ISO 8601 datetime — when the fact was RECORDED (ingestion time)",
     "source": "conversation|extraction|heartbeat|synthesis",
     "provenance": "owner_stated|agent_inferred|tool_derived — trust tier of the fact's origin; see storage.VALID_PROVENANCE. Missing on facts written before this field existed, treated as trusted by storage.is_trusted_provenance()",
+    "authority": "low|standard|high — what the fact is allowed to JUSTIFY, a distinct axis from provenance (which is about where it came from). Derived automatically at write time (storage._derive_default_authority) unless explicitly overridden; see storage.VALID_AUTHORITY. Missing on facts written before this field existed, treated as actionable by storage.is_actionable_authority(). Consumed by memory/synthesis.py to mark low-authority facts [UNVERIFIED] in the synthesis prompt, so consolidation doesn't silently launder an unverified claim into a confidently-stated summary line",
     "status": "active|superseded",
     "supersededBy": "string|null (fact ID that replaced this)",
     "valid_from": "ISO 8601 datetime — when the fact became TRUE (event time). Defaults to timestamp when the caller doesn't know a more specific event date; can differ from timestamp (e.g. a fact recorded days after the event it describes)",

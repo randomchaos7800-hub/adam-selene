@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -349,6 +350,175 @@ class TestCompactMemoryNearDupCap(unittest.TestCase):
             stats = self.heartbeat._compact_memory()
 
         self.assertEqual(stats["near_dup"], 0)
+
+
+class TestRelationshipPulse(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.memory_root = Path(self.tempdir.name)
+        self.addCleanup(self.tempdir.cleanup)
+
+        patcher_snapshot = patch("relay.heartbeat.SnapshotManager")
+        patcher_switchboard = patch("relay.heartbeat.Switchboard")
+        patcher_sessions = patch("relay.heartbeat.SessionStore")
+        patcher_memory_root = patch("relay.heartbeat.config.memory_root", return_value=self.memory_root)
+        patcher_settings = patch("relay.heartbeat.config.load_settings", return_value={})
+        for p in (patcher_snapshot, patcher_switchboard, patcher_sessions, patcher_memory_root, patcher_settings):
+            p.start()
+            self.addCleanup(p.stop)
+        self.heartbeat = Heartbeat(user_id="test-user")
+
+    def _entity(self, name, days_ago):
+        ts = (datetime.now() - timedelta(days=days_ago)).isoformat() if days_ago is not None else None
+        recent_facts = [{"fact": "something", "timestamp": ts}] if ts else []
+        return {"name": name, "category": "people", "aliases": []}, recent_facts
+
+    def test_no_people_entities_returns_none(self):
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[]):
+            result = self._run(self.heartbeat.relationship_pulse())
+        self.assertIsNone(result)
+
+    def test_fresh_relationship_is_not_flagged(self):
+        entity, recent_facts = self._entity("alice", days_ago=3)
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts):
+            result = self._run(self.heartbeat.relationship_pulse())
+        self.assertIsNone(result)
+
+    def test_stale_relationship_is_found_and_returned(self):
+        entity, recent_facts = self._entity("alice", days_ago=30)
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts), \
+             patch("relay.lighthouse.write_entry") as mock_write, \
+             patch.object(self.heartbeat, "_push_rate_limit_ok", return_value=False):
+            result = self._run(self.heartbeat.relationship_pulse())
+        self.assertEqual(result["stale_entity"], "alice")
+        self.assertGreaterEqual(result["days_stale"], 21)
+        mock_write.assert_called_once()
+        self.assertEqual(mock_write.call_args.kwargs["section"], "patterns")
+
+    def test_entity_with_no_facts_is_skipped(self):
+        entity, recent_facts = self._entity("alice", days_ago=None)
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts):
+            result = self._run(self.heartbeat.relationship_pulse())
+        self.assertIsNone(result)
+
+    def test_timezone_aware_fact_timestamp_does_not_crash(self):
+        # A fact timestamp with a UTC offset (e.g. written by a different
+        # code path than the naive-local one add_fact() uses today) used
+        # to blow up max(timestamps) / the days-stale subtraction with a
+        # naive-vs-aware TypeError, silently swallowed by the outer
+        # except Exception in Heartbeat.start() — the whole feature would
+        # just no-op for the day instead of surfacing the real fact.
+        entity = {"name": "alice", "category": "people", "aliases": []}
+        stale_ts = (datetime.now() - timedelta(days=30)).isoformat() + "+00:00"
+        recent_facts = [{"fact": "something", "timestamp": stale_ts}]
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts), \
+             patch("relay.lighthouse.write_entry"), \
+             patch.object(self.heartbeat, "_push_rate_limit_ok", return_value=False):
+            result = self._run(self.heartbeat.relationship_pulse())
+        self.assertEqual(result["stale_entity"], "alice")
+
+    def test_second_call_same_day_is_a_noop(self):
+        entity, recent_facts = self._entity("alice", days_ago=30)
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts), \
+             patch("relay.lighthouse.write_entry") as mock_write, \
+             patch.object(self.heartbeat, "_push_rate_limit_ok", return_value=False):
+            first = self._run(self.heartbeat.relationship_pulse())
+            second = self._run(self.heartbeat.relationship_pulse())
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        mock_write.assert_called_once()  # not called again on the same-day no-op
+
+    def test_cooldown_prevents_re_flagging_within_window(self):
+        entity, recent_facts = self._entity("alice", days_ago=30)
+        state_path = self.memory_root / "relationship_pulse_state.json"
+
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts), \
+             patch("relay.lighthouse.write_entry"), \
+             patch.object(self.heartbeat, "_push_rate_limit_ok", return_value=False):
+            self._run(self.heartbeat.relationship_pulse())
+
+        # Force the state's last_run_date back a day so the next call isn't
+        # blocked by the same-day check, only by the cooldown we want to test.
+        state = json.loads(state_path.read_text())
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        state["last_run_date"] = yesterday
+        state_path.write_text(json.dumps(state))
+
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts), \
+             patch("relay.lighthouse.write_entry") as mock_write_2, \
+             patch.object(self.heartbeat, "_push_rate_limit_ok", return_value=False):
+            result = self._run(self.heartbeat.relationship_pulse())
+
+        self.assertIsNone(result)  # still within the 14-day cooldown for alice
+        mock_write_2.assert_not_called()
+
+    def test_most_stale_person_picked_first(self):
+        entity_a, facts_a = self._entity("alice", days_ago=25)
+        entity_b, facts_b = self._entity("bob", days_ago=60)
+
+        def _read_recent_facts(name):
+            return facts_a if name == "alice" else facts_b
+
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity_a, entity_b]), \
+             patch("relay.heartbeat.storage.read_recent_facts", side_effect=_read_recent_facts), \
+             patch("relay.lighthouse.write_entry"), \
+             patch.object(self.heartbeat, "_push_rate_limit_ok", return_value=False):
+            result = self._run(self.heartbeat.relationship_pulse())
+
+        self.assertEqual(result["stale_entity"], "bob")
+
+    def test_disabled_via_settings_returns_none(self):
+        entity, recent_facts = self._entity("alice", days_ago=60)
+        with patch("relay.heartbeat.config.load_settings", return_value={"relationship_pulse": {"enabled": False}}), \
+             patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts), \
+             patch("relay.lighthouse.write_entry") as mock_write:
+            result = self._run(self.heartbeat.relationship_pulse())
+        self.assertIsNone(result)
+        mock_write.assert_not_called()
+
+    def test_push_attempted_when_rate_limit_ok(self):
+        # relay.telegram_sender does `from telegram import Bot` at module
+        # level, which pulls in python-telegram-bot internals that choke
+        # on this test file's own module-level httpx stub (set up for
+        # unrelated reasons — see the sys.modules.setdefault calls at the
+        # top of this file). Pre-seeding sys.modules with a fake
+        # relay.telegram_sender avoids ever triggering that real import.
+        entity, recent_facts = self._entity("alice", days_ago=30)
+        fake_module = Mock()
+        fake_module.can_send_message.return_value = (True, "ok")
+        fake_module._send_telegram_message = AsyncMock(return_value={"success": True})
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts), \
+             patch("relay.lighthouse.write_entry"), \
+             patch.object(self.heartbeat, "_push_rate_limit_ok", return_value=True), \
+             patch.dict(sys.modules, {"relay.telegram_sender": fake_module}):
+            self._run(self.heartbeat.relationship_pulse())
+        fake_module._send_telegram_message.assert_awaited_once()
+        self.assertIn("Alice", fake_module._send_telegram_message.await_args.args[0])
+        fake_module.mark_initiation_sent.assert_called_once()
+
+    def test_push_skipped_when_rate_limit_not_ok(self):
+        entity, recent_facts = self._entity("alice", days_ago=30)
+        fake_module = Mock()
+        fake_module._send_telegram_message = AsyncMock()
+        with patch("relay.heartbeat.storage.list_entities_by_category", return_value=[entity]), \
+             patch("relay.heartbeat.storage.read_recent_facts", return_value=recent_facts), \
+             patch("relay.lighthouse.write_entry"), \
+             patch.object(self.heartbeat, "_push_rate_limit_ok", return_value=False), \
+             patch.dict(sys.modules, {"relay.telegram_sender": fake_module}):
+            self._run(self.heartbeat.relationship_pulse())
+        fake_module._send_telegram_message.assert_not_awaited()
+
+    def _run(self, coro):
+        return asyncio.run(coro)
 
 
 if __name__ == "__main__":

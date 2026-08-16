@@ -12,7 +12,7 @@ Adam Selene isn't a chatbot. It's an always-on reasoning partner that remembers 
 - **LIGHTHOUSE** — A reasoning journal where the agent tracks its own blind spots, corrections, and evolving understanding of you. Not just what it knows — how it thinks.
 - **Constitutional Constraints** — Six foundational values (L0) that can't be overridden. Hash-verified on every startup, and enforced as deterministic code-level checks on privileged tool calls — not just prompt text the model has to remember to apply.
 - **Interface-Based Capability Gating** — Trusted interfaces (Telegram/Slack) get the full tool surface; untrusted ones (public IRC, or anything unrecognized) get a narrow, explicit allowlist — independent of what identity the message claims.
-- **Heartbeat** — When idle, the agent reflects on recent conversations and researches topics from its agenda. Like REM sleep for AI.
+- **Heartbeat** — When idle, the agent reflects on recent conversations, researches topics from its agenda, and once a day notices when a known person has gone quiet and surfaces a gentle nudge. Like REM sleep for AI.
 - **Two-Stage Extraction, Verified** — Facts are extracted from conversations, then deduplicated against existing memory (Mem0-inspired) — with a deterministic backstop that double-checks the LLM's dedup/supersession calls rather than trusting them blindly.
 - **Fact-Check Gate** — Before a message reaches you, claimed file-creation ("I've created X") gets verified against the real filesystem — outside the model's own reasoning, so a confident fabrication can't slip through.
 - **Nightly Consolidation** — Exponential decay scoring, contradiction resolution, and pattern detection. Memory stays fresh without manual pruning.
@@ -49,6 +49,7 @@ The setup wizard asks for your agent's name, personality, values, and API keys �
 - Python 3.10+
 - [OpenRouter](https://openrouter.ai/) API key (required for inference)
 - Telegram Bot Token, Slack App, or IRC — at least one interface
+- **Linux + [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`)** — required for the `run_shell` tool to work at all. It fails closed (refuses to run, doesn't silently degrade) if `bwrap` is missing, since the sandbox — not a regex blocklist — is the actual security boundary on shell execution. Most distros package it (`apt install bubblewrap` / `dnf install bubblewrap` / etc.). On macOS or another non-Linux dev machine, either run inside a Linux VM/container, or set `shell.require_sandbox: false` in `settings.json` as an explicit, understood opt-out (`run_shell` then runs unsandboxed — every such run is logged loudly).
 - Optional: [Firecrawl](https://firecrawl.dev/) API key (for browser tools), GitHub token
 
 ## Model Requirements
@@ -160,6 +161,8 @@ All behavior is driven by `config/settings.json`:
 | `goals.enabled` | Autonomous multi-turn `/goal` loop — off by default, see [Known Limitations](#known-limitations) |
 | `goals.max_turns` | Hard turn cap for the goal loop (default 10) |
 | `skills.max_self_created` | Cap on agent-authored skills via `skill_manage` (default 15) |
+| `shell.require_sandbox` | `run_shell` fails closed without bubblewrap unless set to `false` (default `true`, Linux-only dep) |
+| `relationship_pulse.stale_after_days` | Flag a person if no new facts in this long (default 21) |
 
 ## Tools
 
