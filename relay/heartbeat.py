@@ -28,6 +28,8 @@ RESEARCH_IDLE_THRESHOLD_MIN = 30  # only research if idle this long
 PUSH_QUALITY_THRESHOLD = 4       # Haiku score 1-5; push if >= this
 PUSH_RATE_LIMIT_HOURS = 4        # min hours between proactive Telegram pushes
 NEAR_DUP_WINDOW = 200            # Tier 1 compaction: max facts compared per fact (see _compact_memory)
+RELATIONSHIP_PULSE_STALE_DAYS_DEFAULT = 21    # flag a person if no new facts in this long
+RELATIONSHIP_PULSE_COOLDOWN_DAYS_DEFAULT = 14 # don't re-flag the same person more often than this
 
 
 class Heartbeat:
@@ -106,6 +108,14 @@ class Heartbeat:
                     await self.research_pulse()
                 except Exception as e:
                     logger.error(f"Heartbeat research pulse error: {e}")
+
+            # Phase 3: relationship pulse — calendar-day cadence, not
+            # idle-gated (self-limits internally to once/day regardless
+            # of tick frequency, so unconditional here is fine).
+            try:
+                await self.relationship_pulse()
+            except Exception as e:
+                logger.error(f"Heartbeat relationship pulse error: {e}")
 
     def stop(self):
         """Stop the heartbeat loop."""
@@ -751,3 +761,150 @@ Return ONLY a single integer 1-5."""
             return last < cutoff
         except Exception:
             return True
+
+    # ------------------------------------------------------------------
+    # Phase 3: relationship pulse
+    #
+    # Inspired by Inflection AI's "Pi Journeys" (launched July 2026) —
+    # published design principle of memory that "grows with you", built
+    # around specific relationships and proactively resurfacing them,
+    # rather than a purely reactive store the agent only consults when
+    # asked. Adapted here as the natural extension of this framework's own
+    # existing "REM sleep" heartbeat metaphor: idle time is when the agent
+    # already reflects and researches — noticing a relationship has gone
+    # quiet fits the same idle-reflection frame.
+    #
+    # Deliberately narrow in scope: this notices staleness and surfaces a
+    # gentle nudge, it does not try to reconstruct Pi's actual (largely
+    # undisclosed) memory architecture. Runs at most once per calendar day
+    # via its own state file, independent of heartbeat tick frequency —
+    # this is a calendar cadence, not an idle-detection check like
+    # research_pulse.
+    # ------------------------------------------------------------------
+
+    def _relationship_pulse_state_path(self) -> Path:
+        return config.memory_root() / "relationship_pulse_state.json"
+
+    def _load_relationship_pulse_state(self) -> dict:
+        path = self._relationship_pulse_state_path()
+        if not path.exists():
+            return {"last_run_date": None, "last_flagged": {}}
+        try:
+            return json.loads(path.read_text())
+        except Exception as e:
+            logger.debug(f"Relationship pulse state load failed, starting fresh: {e}")
+            return {"last_run_date": None, "last_flagged": {}}
+
+    def _save_relationship_pulse_state(self, state: dict) -> None:
+        try:
+            self._relationship_pulse_state_path().write_text(json.dumps(state, indent=2))
+        except Exception as e:
+            logger.warning(f"Relationship pulse state save failed (non-fatal): {e}")
+
+    def _find_stale_relationships(self, state: dict) -> list[tuple[str, int]]:
+        """Return (entity_name, days_since_last_fact) for 'people' entities
+        that have gone quiet, most-stale first. Skips anyone flagged more
+        recently than the cooldown window, so the same person isn't
+        re-nagged about every single day once they cross the threshold."""
+        settings = config.load_settings()
+        rp_settings = settings.get("relationship_pulse", {})
+        stale_after = rp_settings.get("stale_after_days", RELATIONSHIP_PULSE_STALE_DAYS_DEFAULT)
+        cooldown = rp_settings.get("cooldown_days", RELATIONSHIP_PULSE_COOLDOWN_DAYS_DEFAULT)
+
+        now = datetime.now()
+        last_flagged = state.get("last_flagged", {})
+        stale = []
+
+        for entity in storage.list_entities_by_category("people"):
+            name = entity["name"]
+            entity_data = storage.read_entity(name)
+            if not entity_data or not entity_data.get("recent_facts"):
+                continue
+
+            timestamps = []
+            for f in entity_data["recent_facts"]:
+                ts = f.get("timestamp", f.get("extracted", ""))
+                if ts:
+                    try:
+                        timestamps.append(datetime.fromisoformat(ts))
+                    except ValueError:
+                        continue
+            if not timestamps:
+                continue
+
+            days_stale = (now - max(timestamps)).days
+            if days_stale < stale_after:
+                continue
+
+            flagged_at = last_flagged.get(name)
+            if flagged_at:
+                try:
+                    if (now - datetime.fromisoformat(flagged_at)).days < cooldown:
+                        continue
+                except ValueError:
+                    pass
+
+            stale.append((name, days_stale))
+
+        stale.sort(key=lambda item: -item[1])
+        return stale
+
+    async def relationship_pulse(self) -> dict | None:
+        """Once per calendar day: notice a 'people' entity that's gone
+        quiet, log it to LIGHTHOUSE, and — rate-limited, same mechanism
+        research_pulse's proactive push already uses — surface a gentle
+        nudge rather than letting the relationship silently go stale."""
+        settings = config.load_settings()
+        if not settings.get("relationship_pulse", {}).get("enabled", True):
+            return None
+
+        state = self._load_relationship_pulse_state()
+        today = datetime.now().strftime("%Y-%m-%d")
+        if state.get("last_run_date") == today:
+            return None
+
+        stale = self._find_stale_relationships(state)
+        state["last_run_date"] = today
+
+        if not stale:
+            self._save_relationship_pulse_state(state)
+            return None
+
+        name, days_stale = stale[0]
+        state.setdefault("last_flagged", {})[name] = datetime.now().isoformat()
+        self._save_relationship_pulse_state(state)
+
+        display_name = name.replace("_", " ").title()
+        try:
+            from relay.lighthouse import write_entry
+            write_entry(
+                section="patterns",
+                title=f"Haven't heard about {display_name} in a while",
+                content=(
+                    f"No new facts about **{display_name}** in {days_stale} days.\n\n"
+                    f"_(Relationship pulse — noticed during idle reflection, not from anything "
+                    f"the owner said. Worth a gentle check-in, not an assumption something's wrong.)_"
+                ),
+                tags=["relationship-pulse", "proactive"],
+            )
+        except Exception as e:
+            logger.warning(f"Relationship pulse LIGHTHOUSE write failed: {e}")
+
+        if self._push_rate_limit_ok():
+            await self._push_stale_relationship(name, display_name, days_stale)
+
+        return {"stale_entity": name, "days_stale": days_stale}
+
+    async def _push_stale_relationship(self, name: str, display_name: str, days_stale: int) -> None:
+        from relay.telegram_sender import _send_telegram_message, can_send_message, mark_initiation_sent
+        can_send, reason = can_send_message()
+        if not can_send:
+            logger.info(f"Relationship pulse: push rate-limited — {reason}")
+            return
+        message = f"👋 Haven't heard anything about *{display_name}* in {days_stale} days — anything new there?"
+        result = await _send_telegram_message(message)
+        if result.get("success"):
+            mark_initiation_sent()
+            logger.info(f"Relationship pulse: pushed nudge about {name}")
+        else:
+            logger.warning(f"Relationship pulse: push failed — {result.get('error')}")

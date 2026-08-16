@@ -157,6 +157,7 @@ Two-phase idle reflection:
 - **Phase 1 (15 min idle):** Reflect on recent conversation → log observations to LIGHTHOUSE
 - **Phase 2 (30+ min idle):** Research an agenda item → push to owner if quality score ≥ 4/5
 - Rate limited: max 1 proactive push per 4 hours
+- **Phase 3 (once per calendar day, not idle-gated):** relationship pulse — notices a `people`-category entity with no new facts in `relationship_pulse.stale_after_days` (default 21), logs a LIGHTHOUSE `patterns` entry, and — same rate-limited push mechanism as Phase 2 — surfaces a gentle nudge. Won't re-flag the same person more often than `cooldown_days` (default 14). Inspired by Inflection AI's Pi Journeys (memory that "grows with you," built around specific relationships, proactively resurfacing them) — adapted as an extension of this framework's own existing idle-reflection frame, not an attempt to reproduce Pi's (largely undisclosed) actual architecture. Disable via `relationship_pulse.enabled: false`.
 - Tier 0/1 memory compaction (exact + near-duplicate dedup, `SequenceMatcher` ratio > 0.95) runs every tick before reflection. The near-dup pass is O(n²); capped at 200 active facts per entity — an entity past the cap skips just that pass (logged), Tier 0 exact-dup dedup still runs and applies regardless.
 
 ### Working Memory (working_memory.py)
