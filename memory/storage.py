@@ -284,6 +284,54 @@ def is_trusted_provenance(fact: dict) -> bool:
     return fact.get("provenance", DEFAULT_PROVENANCE) != "tool_derived"
 
 
+# Authority is a DIFFERENT axis than provenance, deliberately: provenance
+# says WHERE a fact came from (owner_stated/agent_inferred/tool_derived);
+# authority says WHAT IT'S ALLOWED TO JUSTIFY once it's in memory. These
+# can diverge — an owner_stated fact from an offhand, low-confidence
+# remark ("I guess I kind of prefer terse answers?") shouldn't
+# automatically carry the same weight as an owner_stated fact from an
+# explicit instruction ("never do X without asking me first"), even
+# though both share the same provenance.
+#
+# This distinction is motivated by "authority collapse": a documented
+# failure mode where memory consolidation preserves a fact's CONTENT but
+# silently strips the metadata about how strongly it should be trusted to
+# justify downstream behavior — a casual preference gets synthesized into
+# something later treated as a verified, actionable directive. Without an
+# explicit, persisted authority label, there's nothing to stop that
+# collapse from happening silently during synthesis.py's summary rewrite.
+#
+#   low      — informational only; should not by itself justify a
+#              privileged or hard-behavior-changing action, and synthesis
+#              should phrase it with visible uncertainty rather than as
+#              settled fact
+#   standard — normal conversational use (default)
+#   high     — can justify enforcing an explicit behavioral constraint;
+#              reserved for genuinely unambiguous owner directives
+VALID_AUTHORITY = {"low", "standard", "high"}
+DEFAULT_AUTHORITY = "standard"
+
+
+def _derive_default_authority(category: str, provenance: str) -> str:
+    """Authority isn't independently specified by most callers — it's
+    derived from provenance + category, matching the paper's own approach
+    of predicting authority at write time rather than leaving it
+    unspecified until some later point decides to trust the content."""
+    if provenance == "tool_derived":
+        # Untrusted external content never gets elevated authority by
+        # default, regardless of what category it landed in.
+        return "low"
+    if category == "constraint" and provenance == "owner_stated":
+        return "high"
+    return "standard"
+
+
+def is_actionable_authority(fact: dict) -> bool:
+    """Cheap check consumers can use without hardcoding the taxonomy —
+    mirrors is_trusted_provenance() but for the authority axis."""
+    return fact.get("authority", DEFAULT_AUTHORITY) != "low"
+
+
 def add_fact(
     entity_name: str,
     fact_type: str,
@@ -292,6 +340,7 @@ def add_fact(
     context: str = "active",
     provenance: str = DEFAULT_PROVENANCE,
     valid_from: str | None = None,
+    authority: str | None = None,
 ) -> str:
     """Add a fact to an entity. Returns the fact ID.
 
@@ -318,6 +367,12 @@ def add_fact(
         logger.warning(f"Unknown provenance '{provenance}' for fact on '{entity_name}' — defaulting to agent_inferred")
         provenance = "agent_inferred"
 
+    if authority is None:
+        authority = _derive_default_authority(fact_type, provenance)
+    elif authority not in VALID_AUTHORITY:
+        logger.warning(f"Unknown authority '{authority}' for fact on '{entity_name}' — deriving default instead")
+        authority = _derive_default_authority(fact_type, provenance)
+
     entity_data = entities[name_lower]
     facts_file = get_memory_path() / entity_data["path"] / "facts.json"
     fact_id = f"fact-{uuid.uuid4().hex[:8]}"
@@ -331,6 +386,7 @@ def add_fact(
         "timestamp": now,
         "source": source,
         "provenance": provenance,
+        "authority": authority,
         "status": "active",
         "supersededBy": None,
         "valid_from": valid_from or now,

@@ -50,6 +50,7 @@ Write a new summary that:
 - Highlights what's most relevant RIGHT NOW
 - Uses natural language, not bullet dumps
 - Is concise but complete
+- Preserves the distinction between facts marked [UNVERIFIED] above and everything else — mention an unverified fact with visible hedging if at all, never with the same flat declarative confidence as the rest.
 
 Output ONLY the summary text, no preamble."""
 
@@ -81,8 +82,19 @@ class Synthesizer:
             logger.info(f"No facts for {entity_name}, skipping")
             return None
 
+        # Authority collapse: consolidation/synthesis is exactly the point
+        # where a fact's CONTENT survives but its AUTHORITY metadata
+        # silently doesn't — a low-authority fact (an offhand remark, or
+        # anything extracted from untrusted tool-derived content) gets
+        # rewritten into a summary with the same confident, declarative
+        # phrasing as an explicit owner directive, and the distinction is
+        # gone. Marking low-authority facts explicitly in what the
+        # synthesis model sees — and instructing it (config/synthesis.md)
+        # to preserve that uncertainty in the rewritten summary — is the
+        # deliberate fix, not a stylistic nicety.
         facts_text = "\n".join([
-            f"- [{f.get('category', f.get('type', ''))}] "
+            f"- [{f.get('category', f.get('type', ''))}]"
+            f"{' [UNVERIFIED]' if not storage.is_actionable_authority(f) else ''} "
             f"{f.get('fact', f.get('content', ''))} "
             f"({f.get('timestamp', f.get('extracted', ''))[:10]})"
             for f in facts

@@ -96,6 +96,66 @@ class TestFactProvenance(unittest.TestCase):
         self.assertTrue(storage.is_trusted_provenance({"fact": "old fact, no provenance field"}))
 
 
+class TestFactAuthority(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.get_path_patcher = patch("memory.storage.get_memory_path", return_value=self.root)
+        self.get_path_patcher.start()
+        self.addCleanup(self.get_path_patcher.stop)
+        self.addCleanup(self.tempdir.cleanup)
+
+        entity_dir = self.root / "life" / "areas" / "people" / "alice"
+        entity_dir.mkdir(parents=True, exist_ok=True)
+        (self.root / "entities.json").write_text(json.dumps({
+            "alice": {"category": "people", "aliases": [], "path": "life/areas/people/alice"}
+        }))
+        (entity_dir / "facts.json").write_text(json.dumps({"entity": "alice", "category": "people", "facts": []}))
+
+    def test_default_authority_for_ordinary_owner_stated_fact_is_standard(self):
+        storage.add_fact("alice", "preference", "prefers tea")
+        fact = storage.read_entity("alice")["recent_facts"][0]
+        self.assertEqual(fact["authority"], "standard")
+
+    def test_tool_derived_fact_always_gets_low_authority_regardless_of_category(self):
+        storage.add_fact("alice", "constraint", "must always do X", provenance="tool_derived")
+        fact = storage.read_entity("alice")["recent_facts"][0]
+        self.assertEqual(fact["authority"], "low")
+
+    def test_owner_stated_constraint_gets_high_authority(self):
+        storage.add_fact("alice", "constraint", "never do X without asking", provenance="owner_stated")
+        fact = storage.read_entity("alice")["recent_facts"][0]
+        self.assertEqual(fact["authority"], "high")
+
+    def test_agent_inferred_constraint_does_not_get_high_authority(self):
+        # High authority is reserved for owner_stated + constraint
+        # specifically — an agent's own inference, even about a
+        # constraint-shaped fact, shouldn't auto-escalate to "directive".
+        storage.add_fact("alice", "constraint", "seems to want X always", provenance="agent_inferred")
+        fact = storage.read_entity("alice")["recent_facts"][0]
+        self.assertEqual(fact["authority"], "standard")
+
+    def test_explicit_authority_override_is_respected(self):
+        storage.add_fact("alice", "status", "some fact", authority="low")
+        fact = storage.read_entity("alice")["recent_facts"][0]
+        self.assertEqual(fact["authority"], "low")
+
+    def test_invalid_explicit_authority_falls_back_to_derived_default(self):
+        storage.add_fact("alice", "status", "some fact", authority="totally_made_up")
+        fact = storage.read_entity("alice")["recent_facts"][0]
+        self.assertEqual(fact["authority"], "standard")
+
+    def test_is_actionable_authority_true_for_standard_and_high(self):
+        self.assertTrue(storage.is_actionable_authority({"authority": "standard"}))
+        self.assertTrue(storage.is_actionable_authority({"authority": "high"}))
+
+    def test_is_actionable_authority_false_for_low(self):
+        self.assertFalse(storage.is_actionable_authority({"authority": "low"}))
+
+    def test_is_actionable_authority_defaults_true_for_legacy_facts_without_the_field(self):
+        self.assertTrue(storage.is_actionable_authority({"fact": "old fact, no authority field"}))
+
+
 class TestBiTemporalFacts(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
